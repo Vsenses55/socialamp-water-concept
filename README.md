@@ -2,7 +2,7 @@
 
 **A concept design.** This is an interactive hero experience exploring how film key art can live inside a calm, photographic ocean scene. It isn't a production website: there's no copy, branding or call to action, by design. The page exists to show off the motion, light and interaction ideas below.
 
-**Live demo:** https://vsenses55.github.io/socialamp-water-concept/
+**Live demo:** `https://vsenses55.github.io/<repo-name>/` (available once GitHub Pages is turned on, see [Publishing](#publishing-with-github-desktop--github-pages))
 
 ---
 
@@ -73,7 +73,7 @@ The page uses JavaScript modules, so it needs to be served rather than opened by
    *(Or, if the repository already exists, copy these files into it.)*
 2. Commit all files to `main`, then click **Publish repository**. Untick "Keep this code private" if you want a public demo.
 3. On github.com, open the repository: *Settings → Pages → Build and deployment → Source: Deploy from a branch → Branch: `main` / `(root)` → Save*.
-4. After a minute or two, the site is live at https://vsenses55.github.io/socialamp-water-concept/.
+4. After a minute or two, the site is live at `https://vsenses55.github.io/<repo-name>/`.
 
 Later changes: edit the files, commit in GitHub Desktop, then **Push origin**. Pages redeploys automatically.
 
