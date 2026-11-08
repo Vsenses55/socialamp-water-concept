@@ -153,9 +153,11 @@ void main(){
     float inX = smoothstep(-.004, .012, cuv.x) * smoothstep(1.004, .988, cuv.x);
     float inY = step(0., cuv.y);
     float fade = (1. - smoothstep(0., 380., dy)) * smoothstep(0., 10., dy + 6.);   // reflection starts right at the waterline
-    float a = inX * inY * fade * .82;
+    float a = inX * inY * fade * .85;
+    float rwash = smoothstep(.72, .99, cuv.y);                       // short haze band at the waterline only
     r = screen(r, vec3(.25, .35, .4) * lat * uSunGain);   // sun side of the reflection catches light
-    vec3 tinted = mix(col, r, .62) * vec3(.6, .76, 1.1) + vec3(0., .03, .10);
+    r = mix(r, col, rwash * .97);                                     // hazed rows become the water itself: no edge
+    vec3 tinted = mix(col, r, .62) * mix(vec3(.6, .76, 1.1), vec3(1.), rwash) + vec3(0., .03, .10) * (1. - rwash);   // hazed rows keep the water's own tone
     col = mix(col, tinted, a);
   }
 
@@ -167,9 +169,10 @@ void main(){
     vec3 c = film(cuv);
     vec3 water = col;                                          // what's behind the card at this point
     float sub = cuv.y + (h0 - .5) * .07 + sin(cuv.x*19. + uTime*1.7) * .006;   // waterline moves with the swell
-    float wash = smoothstep(.55, 1., sub);
-    c = mix(c, mix(c, vec3(.10,.36,1.), .7), wash * .45);   // lower card picks up the water's blue
-    float alpha = corner * .9 * (1. - smoothstep(.62, 1., sub) * .5);   // ~10% see-through, softening into the water
+    float wash = smoothstep(.34, .80, sub);
+    vec3 haze = mix(col, vec3(.10, .34, 1.), .25);                  // the deep blue of the water behind it
+    c = mix(c, haze, wash * .95);                                     // lower card melts into a water haze (like the comp)
+    float alpha = corner * .9 * (1. - smoothstep(.78, .955, sub));   // ~10% see-through; fully clear before its edge, so no line at the waterline
     c *= 1. + uTilt * 1.4 * (cuv.x - .5);            // the side turning toward you catches a bit more light
     col = mix(water, c, alpha);
     // the sun's glow spills over the card where they overlap
