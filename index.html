@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SocialAmp — Water Reflection (Concept)</title>
+<link rel="icon" href="data:,">
+<meta name="description" content="Concept design: a real-time WebGL water scene with live reflections, an interactive sun, a liquid film transition and a snapping title wheel.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,900&display=swap" rel="stylesheet">
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden;background:#0a46ff url(assets/water-plate.jpg) center/cover no-repeat}
+  #gl{position:fixed;inset:0;width:100%;height:100%;display:block}
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+</style>
+</head>
+<body>
+<canvas id="gl" aria-hidden="true"></canvas>
+<h1 class="sr">SocialAmp — water reflection concept featuring Black Phone, Violent Night and Nope</h1>
+<p id="now" class="sr" aria-live="polite"></p>
+
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js" } }
+</script>
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>
