@@ -152,12 +152,12 @@ void main(){
     r /= w;
     float inX = smoothstep(-.004, .012, cuv.x) * smoothstep(1.004, .988, cuv.x);
     float inY = step(0., cuv.y);
-    float fade = (1. - smoothstep(0., 380., dy)) * smoothstep(0., 10., dy + 6.);   // reflection starts right at the waterline
-    float a = inX * inY * fade * .85;
-    float rwash = smoothstep(.72, .99, cuv.y);                       // short haze band at the waterline only
-    r = screen(r, vec3(.25, .35, .4) * lat * uSunGain);   // sun side of the reflection catches light
-    r = mix(r, col, rwash * .97);                                     // hazed rows become the water itself: no edge
-    vec3 tinted = mix(col, r, .62) * mix(vec3(.6, .76, 1.1), vec3(1.), rwash) + vec3(0., .03, .10) * (1. - rwash);   // hazed rows keep the water's own tone
+    float fade = pow(1. - smoothstep(0., 360., dy), 1.35);   // starts at the waterline, fades out toward the bottom
+    float rwash = smoothstep(.62, 1., cuv.y);                        // same haze, mirrored: card and reflection meet in one band
+    float a = inX * inY * fade * mix(.85, .67, rwash);
+    r = screen(r, vec3(.25, .35, .4) * lat * uSunGain * (1. - rwash));   // sun side catches light (not at the seam)
+    r = mix(r, mix(col, vec3(.10, .34, 1.), .25), rwash * .6);   // same haze as the card's bottom
+    vec3 tinted = mix(col, r, mix(.62, 1., rwash)) * mix(vec3(.6, .76, 1.1), vec3(1.), rwash) + vec3(0., .03, .10) * (1. - rwash);   // at the waterline it matches the card exactly
     col = mix(col, tinted, a);
   }
 
@@ -169,10 +169,10 @@ void main(){
     vec3 c = film(cuv);
     vec3 water = col;                                          // what's behind the card at this point
     float sub = cuv.y + (h0 - .5) * .07 + sin(cuv.x*19. + uTime*1.7) * .006;   // waterline moves with the swell
-    float wash = smoothstep(.34, .80, sub);
+    float wash = smoothstep(.62, 1., sub);
     vec3 haze = mix(col, vec3(.10, .34, 1.), .25);                  // the deep blue of the water behind it
-    c = mix(c, haze, wash * .95);                                     // lower card melts into a water haze (like the comp)
-    float alpha = corner * .9 * (1. - smoothstep(.78, .955, sub));   // ~10% see-through; fully clear before its edge, so no line at the waterline
+    c = mix(c, haze, wash * .6);                                      // lower card softens into the water's blue
+    float alpha = corner * .9 * (1. - smoothstep(.88, 1.02, sub) * .3);   // ~10% see-through; stays present to the waterline
     c *= 1. + uTilt * 1.4 * (cuv.x - .5);            // the side turning toward you catches a bit more light
     col = mix(water, c, alpha);
     // the sun's glow spills over the card where they overlap
