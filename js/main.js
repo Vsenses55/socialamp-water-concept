@@ -5,15 +5,16 @@
   Everything is positioned in the plate's own pixel space (2560 x 1440) and mapped to the
   screen like background-size: cover, so the scene always matches the original artwork.
 */
+
 import * as THREE from 'three';
 
 const PLATE = 'assets/water-plate.jpg';     // clean water plate, no sun
 const GLOW  = 'assets/sun-glow.png';        // sun glow layer (alpha, normalized)
 const STREAK = 'assets/water-streaks.png';  // bright streaks of the plate (drives the sun path)
-// films, in play order: Black Phone, Violent Night, Nope (starts on Violent Night, like the comp)
-const FILMS = ['assets/films/black-phone.jpg', 'assets/films/violent-night.jpg', 'assets/films/nope.jpg'];
-const START = 1, HOLD = 6, FLOOD = 2.4, USER_FLOOD = 1.4, IDLE = 8;   // seconds
-const TITLES = ['BLACK PHONE', 'VIOLENT NIGHT', 'NOPE'];
+// films, in play order: Black Phone, Violent Night, Nope, Monkey Man (starts on Violent Night, like the comp)
+const FILMS = ['assets/films/black-phone.jpg', 'assets/films/violent-night.jpg', 'assets/films/nope.jpg', 'assets/films/monkey-man.jpg'];
+const START = 1, HOLD = 6, FLOOD = 1.0, USER_FLOOD = 1.0, IDLE = 8;   // seconds
+const TITLES = ['BLACK PHONE', 'VIOLENT NIGHT', 'NOPE', 'MONKEY MAN'];
 const TRACK = -0.062;   // letter spacing in em (tighter, per your reference)
 const PW = 2560, PH = 1440;
 const HORIZON = 593;                       // plate px
@@ -151,7 +152,7 @@ void main(){
     r /= w;
     float inX = smoothstep(-.004, .012, cuv.x) * smoothstep(1.004, .988, cuv.x);
     float inY = step(0., cuv.y);
-    float fade = (1. - smoothstep(0., 380., dy)) * smoothstep(0., 70., dy + 4.);   // reflection eases in below the waterline
+    float fade = (1. - smoothstep(0., 380., dy)) * smoothstep(0., 10., dy + 6.);   // reflection starts right at the waterline
     float a = inX * inY * fade * .82;
     r = screen(r, vec3(.25, .35, .4) * lat * uSunGain);   // sun side of the reflection catches light
     vec3 tinted = mix(col, r, .62) * vec3(.6, .76, 1.1) + vec3(0., .03, .10);
@@ -168,7 +169,7 @@ void main(){
     float sub = cuv.y + (h0 - .5) * .07 + sin(cuv.x*19. + uTime*1.7) * .006;   // waterline moves with the swell
     float wash = smoothstep(.55, 1., sub);
     c = mix(c, mix(c, vec3(.10,.36,1.), .7), wash * .45);   // lower card picks up the water's blue
-    float alpha = corner * .9 * (1. - smoothstep(.58, 1., sub) * .94);  // ~10% see-through, dissolving into the water
+    float alpha = corner * .9 * (1. - smoothstep(.62, 1., sub) * .5);   // ~10% see-through, softening into the water
     c *= 1. + uTilt * 1.4 * (cuv.x - .5);            // the side turning toward you catches a bit more light
     col = mix(water, c, alpha);
     // the sun's glow spills over the card where they overlap
@@ -328,8 +329,9 @@ const N = FILMS.length, reduce = matchMedia('(prefers-reduced-motion: reduce)').
 uniforms.uSoft.value = reduce ? 1 : 0;
 let cur = START, flood = null, nextAt = HOLD, pausedUntil = 0, mixHold = null;
 function show(i, dir = 1, dur = FLOOD){
-  wheel.target += dir;
   i = ((i % N) + N) % N; if (i === cur && !flood) return;
+  let d = i - cur; d -= N * Math.round(d / N); if (d === 0) d = dir;   // shortest way round the loop
+  wheel.target = Math.round(wheel.target) + d;                       // wheel always lands on the film being shown
   const t = clock.getElapsedTime();
   uniforms.tA.value = flood ? (uniforms.uMix.value > .5 ? uniforms.tB.value : uniforms.tA.value) : filmT[cur];  // mid-change: start from whichever film dominates
   uniforms.tB.value = filmT[i]; cur = i;
@@ -358,7 +360,7 @@ addEventListener('touchstart', e => { ty0 = e.touches[0].clientY; }, { passive:t
 addEventListener('touchmove', e => { if (ty0 === null) return; const d = ty0 - e.touches[0].clientY; if (Math.abs(d) > 45){ userStep(Math.sign(d)); ty0 = null; } }, { passive:true });
 addEventListener('keydown', e => { if (e.repeat) return; if (['ArrowDown','PageDown',' '].includes(e.key)){ e.preventDefault(); userStep(1); } if (['ArrowUp','PageUp'].includes(e.key)){ e.preventDefault(); userStep(-1); } });
 function tick(t){
-  if (flood){ const m = Math.min(1, (t - flood.start) / flood.dur); uniforms.uMix.value = reduce ? m : m*m*m*(m*(m*6 - 15) + 10);   // smooth in and out
+  if (flood){ const m = Math.min(1, (t - flood.start) / flood.dur); uniforms.uMix.value = reduce ? m : 1 - Math.pow(1 - m, 3);   // fast start, soft landing: lands with the wheel
     if (m >= 1){ flood = null; uniforms.tA.value = uniforms.tB.value; uniforms.uMix.value = 1; } }
   else uniforms.uMix.value = mixHold ?? 1;
   if (!flood && t >= nextAt && t >= pausedUntil) show(cur + 1, 1);
