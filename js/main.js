@@ -26,6 +26,7 @@ const frag = `
 precision highp float;
 uniform sampler2D tPlate, tA, tB, tGlow, tStreak;
 uniform float uMix, uSoft, uRipT, uTilt;
+uniform sampler2D tSim; uniform vec2 uSimTexel;   // water surface simulation
 uniform float uK, uKt, uTy; uniform vec2 uC;   // responsive: card scale about uC, title scale anchored above the card
 uniform sampler2D tTitles;
 uniform vec2 uSun; uniform float uSunScale, uSunGain;
@@ -101,8 +102,21 @@ void main(){
   float rr0 = length(rd);
   float renv = exp(-pow((rr0 - age*640.)/150., 2.)) * exp(-age*.85) * step(0., age) * below;
   disp += (rd/(rr0 + 1e-3)) * sin(rr0*.05 - age*7.) * renv * 6.;
-
+  // live water surface (height-field simulation) disturbed by the cursor, laid on the sea in perspective
+  float simD = max(p.y - uHorizon, 1.);
+  vec2 suv = vec2(((p.x - ${PW/2}.) / simD + 2.2) / 4.4, (900. / simD - 1.) / 4.);
+  float simIn = below * step(0., suv.x) * step(suv.x, 1.) * step(0., suv.y) * step(suv.y, 1.);
+  vec2 sg = vec2(0.);
+  if (simIn > 0.){
+    vec2 tx = uSimTexel;
+    sg = vec2(texture2D(tSim, suv + vec2(tx.x, 0.)).r - texture2D(tSim, suv - vec2(tx.x, 0.)).r,
+              texture2D(tSim, suv + vec2(0., tx.y)).r - texture2D(tSim, suv - vec2(0., tx.y)).r);
+    float near = clamp(simD / 600., .1, 1.4);                         // bigger bends close to the viewer
+    sg *= near * (1. - smoothstep(.8, 1., suv.y)) * smoothstep(0., .04, suv.x) * smoothstep(1., .96, suv.x);
+    disp += vec2(sg.x, -sg.y * .6) * 420.;
+  }
   vec3 col = plate(p + disp).rgb;
+  col += vec3(.16, .24, .32) * clamp(-sg.y * 20. - sg.x * 7., -.2, .6) * .35;   // light and shade on the moving surface
 
   // ---- the sun: your glow layer, blended the way the original was (fitted to it) ----
   float An = glowA(p) * uSunGain;                  // normalized glow
@@ -198,6 +212,7 @@ const scene = new THREE.Scene(), cam = new THREE.OrthographicCamera(-1,1,1,-1,0,
 const load = src => new Promise(r => new THREE.TextureLoader().load(src, t => { t.colorSpace = THREE.NoColorSpace; t.minFilter = THREE.LinearFilter; t.generateMipmaps = false; r(t); }));
 
 const uniforms = {
+  tSim:{value:null}, uSimTexel:{value:new THREE.Vector2(1/384, 1/384)},
   uTilt:{value:0}, uK:{value:1}, uKt:{value:1}, uTy:{value:482}, uC:{value:new THREE.Vector2(1280, 640)}, tTitles:{value:null}, tPlate:{value:null}, tA:{value:null}, tB:{value:null}, tGlow:{value:null}, tStreak:{value:null},
   uMix:{value:1}, uSoft:{value:0}, uRipT:{value:-100},
   uSun:{value:new THREE.Vector2(...SUN_REST)}, uSunScale:{value:1}, uSunGain:{value:1},
@@ -246,6 +261,167 @@ document.documentElement.addEventListener('pointerleave', rest);
 addEventListener('blur', rest);
 
 const reduceTilt = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// ---- water surface simulation: the cursor pushes into the water, waves spread, interfere and settle ----
+const SIM = 384;
+const simRT = [0, 1].map(() => new THREE.WebGLRenderTarget(SIM, SIM, { type:THREE.HalfFloatType, format:THREE.RGBAFormat,
+  minFilter:THREE.LinearFilter, magFilter:THREE.LinearFilter, depthBuffer:false, stencilBuffer:false }));
+const simMat = new THREE.ShaderMaterial({
+  uniforms:{ tPrev:{value:null}, texel:{value:new THREE.Vector2(1/SIM, 1/SIM)}, uDrop:{value:Array.from({length:16}, () => new THREE.Vector4())}, uN:{value:0} },
+  vertexShader:'varying vec2 vUv; void main(){ vUv = position.xy * .5 + .5; gl_Position = vec4(position.xy, 0., 1.); }',
+  fragmentShader:`precision highp float; varying vec2 vUv; uniform sampler2D tPrev; uniform vec2 texel; uniform vec4 uDrop[16]; uniform int uN;
+    void main(){
+      vec4 c = texture2D(tPrev, vUv);
+      float n = (texture2D(tPrev, vUv + vec2(texel.x, 0.)).r + texture2D(tPrev, vUv - vec2(texel.x, 0.)).r +
+                 texture2D(tPrev, vUv + vec2(0., texel.y)).r + texture2D(tPrev, vUv - vec2(0., texel.y)).r) * .5 - c.g;
+      n *= .9;                                                         // dies out within ~125px, so it stays right around the cursor
+      for (int i = 0; i < 16; i++){ if (i >= uN) break;
+        vec2 d = (vUv - uDrop[i].xy) / texel;
+        n -= uDrop[i].w * exp(-dot(d, d) / (uDrop[i].z * uDrop[i].z)); }
+      gl_FragColor = vec4(n, c.r, 0., 1.);
+    }`
+});
+const simScene = new THREE.Scene(); simScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), simMat));
+let simCur = 0, simAcc = 0, pending = [];
+[0, 1].forEach(i => { renderer.setRenderTarget(simRT[i]); renderer.setClearColor(0x000000, 0); renderer.clear(); });
+renderer.setRenderTarget(null);
+function simStep(dt){
+  simAcc = Math.min(simAcc + dt, 3 / 60);
+  while (simAcc >= 1 / 60){
+    simAcc -= 1 / 60;
+    const batch = pending.splice(0, 16);
+    batch.forEach((d, i) => simMat.uniforms.uDrop.value[i].set(d[0], d[1], d[2], d[3]));
+    simMat.uniforms.uN.value = batch.length;
+    simMat.uniforms.tPrev.value = simRT[simCur].texture;
+    renderer.setRenderTarget(simRT[1 - simCur]); renderer.render(simScene, cam);
+    simCur = 1 - simCur;
+  }
+  renderer.setRenderTarget(null);
+  uniforms.tSim.value = simRT[simCur].texture;
+}
+const toSim = (X, Y) => { const d = Math.max(Y - HORIZON, 1); return [((X - PW / 2) / d + 2.2) / 4.4, (900 / d - 1) / 4]; };
+let lastMove = { x:0, y:0, t:0 }, lastSim = null, lastDrip = 0;
+function rippleAt(cx, cy, force){
+  const X = (cx - view.ox) / view.sc, Y = (cy - view.oy) / view.sc;   // screen -> plate px
+  const now = performance.now() / 1000;
+  const speed = Math.hypot(cx - lastMove.x, cy - lastMove.y) / Math.max(now - lastMove.t, .008);   // css px/s
+  lastMove = { x:cx, y:cy, t:now };
+  if (Y < HORIZON + 6){ lastSim = null; return; }                     // only the water moves
+  const [u, v] = toSim(X, Y);
+  if (u < 0 || u > 1 || v < 0 || v > 1){ lastSim = null; return; }
+  const s = force ? .9 : clamp(speed / 1400, .08, .7) * (reduceTilt ? .5 : 1);
+  // push along the path since the last event, so a moving cursor leaves a continuous wake
+  const from = lastSim || [u, v], steps = Math.min(10, Math.max(1, Math.ceil(Math.hypot(u - from[0], v - from[1]) / .006)));
+  for (let i = 1; i <= steps; i++){ const f = i / steps; pending.push([from[0] + (u - from[0]) * f, from[1] + (v - from[1]) * f, force ? 1.6 : 1.2, s / steps * 1.8]); }
+  if (pending.length > 64) pending.splice(0, pending.length - 64);
+  lastSim = [u, v];
+  if (force || (speed > 60 && now - lastDrip > .11)){ lastDrip = now; sound.drip(force ? 1 : clamp(speed / 900, .2, 1)); }
+}
+
+// ---- water sounds: synthesized with Web Audio (off until the visitor turns it on) ----
+const sound = (() => {
+  let ac = null, master = null, on = false, noiseBuf = null;
+  function init(){
+    ac = new (window.AudioContext || window.webkitAudioContext)();
+    master = ac.createGain(); master.gain.value = 0; master.connect(ac.destination);
+    // noise for the little splashes
+    noiseBuf = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
+    const d = noiseBuf.getChannelData(0); let b = 0;
+    for (let i = 0; i < d.length; i++){ const w = Math.random() * 2 - 1; b = (b + .02 * w) / 1.02; d[i] = b * 3.5; }   // soft brown noise
+  }
+  function drip(s){
+    if (!on || !ac) return;
+    const t = ac.currentTime;
+    // a bubble "bloop": a short sine whose pitch rises as it closes
+    const f = 420 + Math.random() * 520;
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(f, t); o.frequency.exponentialRampToValueAtTime(f * (1.5 + Math.random() * .6), t + .07);
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(.09 * s, t + .006); g.gain.exponentialRampToValueAtTime(.0005, t + .16);
+    const pan = ac.createStereoPanner ? ac.createStereoPanner() : null;
+    const out = pan ? (pan.pan.value = lastMove.x / innerWidth * 1.4 - .7, o.connect(g).connect(pan), pan) : o.connect(g);
+    out.connect(master); o.start(t); o.stop(t + .18);
+    // a little splash on faster movement
+    if (s > .45){
+      const n = ac.createBufferSource(); n.buffer = noiseBuf; n.playbackRate.value = 3;
+      const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1800 + Math.random() * 1400; bp.Q.value = 1.2;
+      const ng = ac.createGain(); ng.gain.setValueAtTime(.05 * s, t); ng.gain.exponentialRampToValueAtTime(.0005, t + .12);
+      n.connect(bp).connect(ng).connect(master); n.start(t, Math.random()); n.stop(t + .13);
+    }
+  }
+  function toggle(){
+    if (!ac) init();
+    on = !on;
+    if (ac.state === 'suspended') ac.resume().catch(()=>{});
+    master.gain.cancelScheduledValues(ac.currentTime);
+    master.gain.setTargetAtTime(on ? .9 : 0, ac.currentTime, .25);
+    return on;
+  }
+  return { drip, toggle, get on(){ return on; } };
+})();
+
+// ---- custom cursor: dot + trailing ring, "SOUND ON" prompt when the cursor rests ----
+const fine = matchMedia('(pointer: fine)').matches;
+const fontL = document.createElement('link'); fontL.rel = 'stylesheet';
+fontL.href = 'https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,500&display=swap'; document.head.appendChild(fontL);
+const cssC = document.createElement('style');
+cssC.textContent = `
+  ${fine ? 'html,body,canvas{cursor:none!important}' : ''}
+  #cur{position:fixed;inset:0;pointer-events:none;z-index:10}
+  #curLabel{position:fixed;left:0;top:0;pointer-events:none;z-index:11;color:#fff;
+    font:500 13px/1 Archivo,sans-serif;font-stretch:125%;font-variation-settings:"wdth" 125;letter-spacing:-.02em;white-space:nowrap;
+    clip-path:inset(0 100% 0 0);opacity:0;transition:clip-path .55s cubic-bezier(.2,.8,.2,1),opacity .35s}
+  #curLabel.show{clip-path:inset(0 0 0 0);opacity:1}
+  #soundBtn{position:fixed;inset:auto 0 0 auto;width:1px;height:1px;opacity:0}`;
+document.head.appendChild(cssC);
+const curCan = document.createElement('canvas'); curCan.id = 'cur'; document.body.appendChild(curCan);
+const curCtx = curCan.getContext('2d');
+const label = document.createElement('div'); label.id = 'curLabel'; label.textContent = 'SOUND ON'; document.body.appendChild(label);
+const soundBtn = document.createElement('button'); soundBtn.id = 'soundBtn'; soundBtn.setAttribute('aria-label', 'Turn sound on'); document.body.appendChild(soundBtn);
+function setSound(){ const on = sound.toggle(); label.textContent = on ? 'SOUND OFF' : 'SOUND ON'; soundBtn.setAttribute('aria-label', on ? 'Turn sound off' : 'Turn sound on'); idleSince = performance.now(); }
+soundBtn.addEventListener('click', e => { e.stopPropagation(); setSound(); });
+
+const pc_ = { x:innerWidth * .76, y:innerHeight * .74, rx:innerWidth * .76, ry:innerHeight * .74, seen:!fine, hover:0 };
+let idleSince = performance.now(), trail = [];
+function sizeCur(){ const d = Math.min(devicePixelRatio, 2); curCan.width = innerWidth * d; curCan.height = innerHeight * d; curCtx.setTransform(d, 0, 0, d, 0, 0); }
+sizeCur(); addEventListener('resize', sizeCur);
+addEventListener('pointermove', e => {
+  if (fine || e.pointerType !== 'mouse'){ pc_.x = e.clientX; pc_.y = e.clientY; pc_.seen = true; idleSince = performance.now(); }
+  rippleAt(e.clientX, e.clientY, false);
+});
+addEventListener('pointerdown', e => rippleAt(e.clientX, e.clientY, true));
+document.documentElement.addEventListener('pointerleave', () => { if (fine) pc_.seen = false; });
+addEventListener('click', e => { if (!titleAt(e.clientX, e.clientY)) setSound(); });
+
+function drawCursor(dt){
+  const W = innerWidth, H = innerHeight;
+  curCtx.clearRect(0, 0, W, H);
+  if (!pc_.seen) { label.classList.remove('show'); return; }
+  const k = 1 - Math.exp(-dt * 9);                                  // the ring trails the dot
+  pc_.rx += (pc_.x - pc_.rx) * k; pc_.ry += (pc_.y - pc_.ry) * k;
+  const lag = Math.hypot(pc_.x - pc_.rx, pc_.y - pc_.ry);
+  pc_.hover += ((wheel.hover >= 0 ? 1 : 0) - pc_.hover) * Math.min(1, dt * 10);
+  trail.push({ x:pc_.rx, y:pc_.ry }); if (trail.length > 14) trail.shift();
+  const R = 22 + pc_.hover * 8;
+  // resting: the ring draws itself around the dot, then breathes
+  const idle = (performance.now() - idleSince) / 1000;
+  const resting = idle > .45 && lag < 2;
+  const sweep = resting ? Math.min(1, (idle - .45) / .8) : 0;
+  const ease = 1 - Math.pow(1 - sweep, 3);
+  const breathe = resting && sweep >= 1 ? Math.sin((idle - 1.25) * 2.2) * 1.5 : 0;
+  curCtx.lineWidth = 1.2;
+  curCtx.strokeStyle = `rgba(255,255,255,${resting ? .35 : .7})`;
+  curCtx.beginPath(); curCtx.arc(pc_.rx, pc_.ry, R + breathe, 0, 7); curCtx.stroke();
+  if (resting){
+    curCtx.strokeStyle = 'rgba(255,255,255,.95)'; curCtx.lineWidth = 1.6;
+    curCtx.beginPath(); curCtx.arc(pc_.rx, pc_.ry, R + breathe, -Math.PI / 2, -Math.PI / 2 + ease * Math.PI * 2); curCtx.stroke();
+  }
+  curCtx.fillStyle = '#fff'; curCtx.beginPath(); curCtx.arc(pc_.x, pc_.y, 2, 0, 7); curCtx.fill();
+  // the prompt appears to the right of the ring while resting, and clears as soon as the cursor moves
+  const showLabel = resting && wheel.hover < 0;
+  label.classList.toggle('show', showLabel);
+  label.style.transform = `translate(${pc_.rx + R + 18}px, ${pc_.ry - 6}px)`;
+}
+
 const clock = new THREE.Clock(); let last = 0;
 function loop(){
   const now = clock.getElapsedTime(), dt = Math.min(now - last, .05); last = now;
@@ -254,7 +430,7 @@ function loop(){
   tilt.v += (tilt.t - tilt.v) * (1 - Math.exp(-dt * 2.4)); uniforms.uTilt.value = reduceTilt ? 0 : tilt.v;
   uniforms.uSun.value.set(sun.x, sun.y); uniforms.uSunGain.value = sun.gain;
   uniforms.uTime.value = fixedTime ?? now;
-  if (typeof tick === 'function' && uniforms.tB.value){ tick(now); stepWheel(dt); }
+  if (typeof tick === 'function' && uniforms.tB.value){ tick(now); stepWheel(dt); simStep(dt); drawCursor(dt); }
   renderer.render(scene, cam);
   requestAnimationFrame(loop);
 }
@@ -324,7 +500,7 @@ function titleAt(cx, cy){
   const hit = wheel.rects.find(r => r.i !== cur && Math.abs(r.o) < 1.5 && px >= r.x0 && px <= r.x1 && py >= r.y0 && py <= r.y1 && !onCard);
   return hit || null;
 }
-addEventListener('pointermove', e => { const h = titleAt(e.clientX, e.clientY); wheel.hover = h ? h.i : -1; document.body.style.cursor = h ? 'pointer' : ''; });
+addEventListener('pointermove', e => { const h = titleAt(e.clientX, e.clientY); wheel.hover = h ? h.i : -1; if (!fine) document.body.style.cursor = h ? 'pointer' : ''; });
 addEventListener('click', e => { const h = titleAt(e.clientX, e.clientY); if (h) userStep(Math.sign(h.o)); });
 
 // ---- film rotation: plays on its own; scroll / swipe / arrow keys step through it ----
