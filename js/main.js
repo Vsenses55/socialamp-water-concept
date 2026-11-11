@@ -104,7 +104,7 @@ void main(){
   disp += (rd/(rr0 + 1e-3)) * sin(rr0*.05 - age*7.) * renv * 6.;
   // live water surface (height-field simulation) disturbed by the cursor, laid on the sea in perspective
   float simD = max(p.y - uHorizon, 1.);
-  vec2 suv = vec2(((p.x - ${PW/2}.) / simD + 2.2) / 4.4, (900. / simD - 1.) / 4.);
+  vec2 suv = vec2(((p.x - ${PW/2}.) / simD + 2.2) / 4.4, (1. / simD - .0011806) * 206.2);   // flat on the sea: ripples read as thin ellipses
   float simIn = below * step(0., suv.x) * step(suv.x, 1.) * step(0., suv.y) * step(suv.y, 1.);
   vec2 sg = vec2(0.);
   if (simIn > 0.){
@@ -212,7 +212,7 @@ const scene = new THREE.Scene(), cam = new THREE.OrthographicCamera(-1,1,1,-1,0,
 const load = src => new Promise(r => new THREE.TextureLoader().load(src, t => { t.colorSpace = THREE.NoColorSpace; t.minFilter = THREE.LinearFilter; t.generateMipmaps = false; r(t); }));
 
 const uniforms = {
-  tSim:{value:null}, uSimTexel:{value:new THREE.Vector2(1/384, 1/384)},
+  tSim:{value:null}, uSimTexel:{value:new THREE.Vector2(1/384, 1/1024)},
   uTilt:{value:0}, uK:{value:1}, uKt:{value:1}, uTy:{value:482}, uC:{value:new THREE.Vector2(1280, 640)}, tTitles:{value:null}, tPlate:{value:null}, tA:{value:null}, tB:{value:null}, tGlow:{value:null}, tStreak:{value:null},
   uMix:{value:1}, uSoft:{value:0}, uRipT:{value:-100},
   uSun:{value:new THREE.Vector2(...SUN_REST)}, uSunScale:{value:1}, uSunGain:{value:1},
@@ -263,11 +263,11 @@ addEventListener('blur', rest);
 const reduceTilt = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // ---- water surface simulation: the cursor pushes into the water, waves spread, interfere and settle ----
-const SIM = 384;
-const simRT = [0, 1].map(() => new THREE.WebGLRenderTarget(SIM, SIM, { type:THREE.HalfFloatType, format:THREE.RGBAFormat,
+const SIM = 384, SIMH = 1024;
+const simRT = [0, 1].map(() => new THREE.WebGLRenderTarget(SIM, SIMH, { type:THREE.HalfFloatType, format:THREE.RGBAFormat,
   minFilter:THREE.LinearFilter, magFilter:THREE.LinearFilter, depthBuffer:false, stencilBuffer:false }));
 const simMat = new THREE.ShaderMaterial({
-  uniforms:{ tPrev:{value:null}, texel:{value:new THREE.Vector2(1/SIM, 1/SIM)}, uDrop:{value:Array.from({length:16}, () => new THREE.Vector4())}, uN:{value:0} },
+  uniforms:{ tPrev:{value:null}, texel:{value:new THREE.Vector2(1/SIM, 1/SIMH)}, uDrop:{value:Array.from({length:16}, () => new THREE.Vector4())}, uN:{value:0} },
   vertexShader:'varying vec2 vUv; void main(){ vUv = position.xy * .5 + .5; gl_Position = vec4(position.xy, 0., 1.); }',
   fragmentShader:`precision highp float; varying vec2 vUv; uniform sampler2D tPrev; uniform vec2 texel; uniform vec4 uDrop[16]; uniform int uN;
     void main(){
@@ -299,7 +299,7 @@ function simStep(dt){
   renderer.setRenderTarget(null);
   uniforms.tSim.value = simRT[simCur].texture;
 }
-const toSim = (X, Y) => { const d = Math.max(Y - HORIZON, 1); return [((X - PW / 2) / d + 2.2) / 4.4, (900 / d - 1) / 4]; };
+const toSim = (X, Y) => { const d = Math.max(Y - HORIZON, 1); return [((X - PW / 2) / d + 2.2) / 4.4, (1 / d - .0011806) * 206.2]; };
 let lastMove = { x:0, y:0, t:0 }, lastSim = null, lastDrip = 0;
 function rippleAt(cx, cy, force){
   const X = (cx - view.ox) / view.sc, Y = (cy - view.oy) / view.sc;   // screen -> plate px
@@ -309,10 +309,10 @@ function rippleAt(cx, cy, force){
   if (Y < HORIZON + 6){ lastSim = null; return; }                     // only the water moves
   const [u, v] = toSim(X, Y);
   if (u < 0 || u > 1 || v < 0 || v > 1){ lastSim = null; return; }
-  const s = force ? .9 : clamp(speed / 1400, .08, .7) * (reduceTilt ? .5 : 1);
+  const s = force ? .3 : clamp(speed / 1400, .08, .7) * (reduceTilt ? .5 : 1);
   // push along the path since the last event, so a moving cursor leaves a continuous wake
   const from = lastSim || [u, v], steps = Math.min(10, Math.max(1, Math.ceil(Math.hypot(u - from[0], v - from[1]) / .006)));
-  for (let i = 1; i <= steps; i++){ const f = i / steps; pending.push([from[0] + (u - from[0]) * f, from[1] + (v - from[1]) * f, force ? 1.6 : 1.2, s / steps * 1.8]); }
+  for (let i = 1; i <= steps; i++){ const f = i / steps; pending.push([from[0] + (u - from[0]) * f, from[1] + (v - from[1]) * f, force ? 1. : 1.2, s / steps * 1.8]); }
   if (pending.length > 64) pending.splice(0, pending.length - 64);
   lastSim = [u, v];
   if (force || (speed > 60 && now - lastDrip > .11)){ lastDrip = now; sound.drip(force ? 1 : clamp(speed / 900, .2, 1)); }
