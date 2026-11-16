@@ -14,7 +14,7 @@ const intro = document.createElement('div');
 intro.innerHTML = '<button id="enterBtn" disabled><span class="txt">ENTER WATER CONCEPT</span></button>';
 const introCss = document.createElement('style');
 introCss.textContent = `
-  #intro{position:fixed;inset:0;z-index:30;background:#0a46ff;display:grid;place-items:center;cursor:auto!important;transition:opacity 1s ease .1s}
+  #intro{position:fixed;inset:0;z-index:30;background:rgba(0,72,255,.86);display:grid;place-items:center;cursor:auto!important;transition:opacity 1s ease .1s}
   #intro.out{opacity:0;pointer-events:none}
   #enterBtn{all:unset;display:flex;align-items:center;gap:18px;color:#fff;cursor:pointer!important;opacity:.35;transition:opacity .6s}
   #enterBtn:not([disabled]){opacity:1}
@@ -235,7 +235,7 @@ void main(){
     vec2 cq = vec2(p.x * .011, p.y * .028);
     float c1 = fbm(cq + vec2(uTime * .35, uTime * .21)), c2 = fbm(cq * 1.7 - vec2(uTime * .28, -uTime * .33) + 4.);
     float caus = pow(1. - abs(c1 - c2) * 3.2, 6.);
-    float floorM = smoothstep(2280., 2620., p.y) * smoothstep(.12, .45, dot(u, vec3(.3, .5, .2)));
+    float floorM = smoothstep(2470., 2560., p.y) * smoothstep(.12, .45, dot(u, vec3(.3, .5, .2)));   // only on the sand, below the far seabed line
     u += vec3(.32, .62, .85) * clamp(caus, 0., 1.) * floorM * .55;
     // passing through the surface: a bright, rippling band
     u += vec3(.45, .75, 1.) * uCross * .35 * exp(-pow((p.y - 1440.) / 160., 2.));
@@ -283,6 +283,52 @@ function resize(){
 }
 
 let fixedTime = null;   // set to a number to freeze the water (handy for screenshots)
+// ---- underwater copy, one entry per film (same order as FILMS) ----
+const COPY = [
+  ["The Black Phone is a 2021 American supernatural horror film directed by Scott Derrickson from a screenplay he wrote with C. Robert Cargill, based on the 2004 short story by Joe Hill. It is the first installment in the Black Phone franchise. It stars Mason Thames as Finney, a teenage boy abducted by a serial child killer known colloquially as the Grabber (Ethan Hawke). When Finney encounters a mystical black rotary phone in captivity, he uses it to plot his escape by communicating with the ghosts of the Grabber's slain victims. Madeleine McGraw, Jeremy Davies, and James Ransone also feature in the principal cast.",
+   "Derrickson and Cargill produced The Black Phone in association with Blumhouse Productions CEO Jason Blum. Universal Pictures oversaw the film's commercial distribution, and funding was sourced through a pact with Blumhouse and tax subsidies from the North Carolina state government."],
+  ["Once again, Studio City PXL was excited to leverage our Social Review Technology for Universal's latest Christmas themed horror film “Violent Night” starring David Harbour."],
+  ["Nope (stylized in all caps) is a 2022 American science fiction neo-Western horror film written, directed, and produced by Jordan Peele. It stars Daniel Kaluuya, Keke Palmer, Steven Yeun, Michael Wincott, Brandon Perea, and Keith David. In the film, horse-wrangling siblings Otis \"OJ\" Jr. (Kaluuya) and Emerald (Palmer) attempt to capture evidence of an unidentified flying object in Agua Dulce, California.",
+   "Peele announced Nope, which is his third directorial film, in November 2020. He cited King Kong (1933), The Wizard of Oz (1939), Jaws (1975), Close Encounters of the Third Kind (1977), Jurassic Park (1993) and Signs (2002) as his main inspirations. Palmer and Kaluuya joined in February 2021. Yeun was cast the next month, and Peele revealed the title in July 2021. Filming began in June 2021 in Los Angeles County, and wrapped that November. Nope was produced under Peele and Ian Cooper's Monkeypaw Productions banner."],
+  ["Monkey Man is a 2024 action thriller film directed and produced by Dev Patel in his directorial debut, who also co-wrote the screenplay with Paul Angunawela and John Collee. The film stars Patel as Kid, a man who seeks vengeance on the corrupt leaders responsible for his mother's death. Sharlto Copley, Pitobash, and Vipin Sharma are featured in supporting roles.",
+   "Monkey Man premiered at South by Southwest on March 11, 2024, and was released theatrically in the United States and Canada by Universal Pictures on April 5, 2024. The film received positive reviews and grossed $35 million worldwide against a $10 million budget. It was nominated at the 78th BAFTA Awards for Outstanding Debut by a British Writer, Director or Producer."],
+];
+const copyFont = document.createElement('link'); copyFont.rel = 'stylesheet';
+copyFont.href = 'https://fonts.googleapis.com/css2?family=Montserrat:wght@400&display=swap'; document.head.appendChild(copyFont);
+const copyCss = document.createElement('style');
+copyCss.textContent = `
+  #copy{position:fixed;left:50%;top:0;z-index:5;pointer-events:none;color:rgba(214,232,255,.82);
+    font:400 var(--fs,15px)/2.3 Montserrat,sans-serif;transform-origin:0 0}
+  #copy p{margin:0 0 1.15em;opacity:0;transform:translateY(14px);transition:opacity .9s ease,transform 1.1s cubic-bezier(.2,.8,.2,1)}
+  #copy.show p{opacity:1;transform:none}
+  #copy.show p:nth-child(2){transition-delay:.18s}
+  #copy.hide p{transition-duration:.35s}`;
+document.head.appendChild(copyCss);
+const copyEl = document.createElement('div'); copyEl.id = 'copy'; copyEl.setAttribute('aria-live', 'polite'); document.body.appendChild(copyEl);
+let copyFor = -1;
+function placeCopy(){
+  // anchored in the scene (plate px), like the reference: block about 1835px wide, text starting ~250px below the top of the underwater view
+  const narrow = innerWidth < 700;
+  const w = Math.min(1835 * view.sc, innerWidth * (narrow ? .86 : .8));
+  const top = (2880 - 1440 + 250 - dive.y) * view.sc + view.oy;
+  copyEl.style.width = w + 'px';
+  copyEl.style.setProperty('--fs', Math.max(narrow ? 14 : 13, 30 * view.sc).toFixed(1) + 'px');
+  copyEl.style.transform = `translate(${-w / 2}px, ${top}px)`;
+}
+function updateCopy(){
+  const settled = dive.under && !dive.moving;
+  if (settled && copyFor !== cur){
+    copyFor = cur;
+    const paras = innerWidth < 700 ? COPY[cur].slice(0, 1) : COPY[cur];   // phones: first paragraph only
+    copyEl.innerHTML = paras.map(t => `<p>${t.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</p>`).join('');
+    void copyEl.offsetWidth;
+  }
+  copyEl.classList.toggle('show', settled);
+  copyEl.classList.toggle('hide', !settled);
+  if (!dive.under && !dive.moving) copyFor = -1;
+  placeCopy();
+}
+
 // ---- the dive: hold to sink below the surface, click to come back up ----
 const DIVE_T = 2.6, HOLD_T = .9;
 const dive = { y:0, from:0, to:0, start:-1, under:false, moving:false };
@@ -461,7 +507,8 @@ const curCan = document.createElement('canvas'); curCan.id = 'cur'; document.bod
 const curCtx = curCan.getContext('2d');
 const label = document.createElement('div'); label.id = 'curLabel'; label.textContent = 'HOLD TO DIVE'; document.body.appendChild(label);
 
-const pc_ = { x:innerWidth * .76, y:innerHeight * .74, rx:innerWidth * .76, ry:innerHeight * .74, seen:!fine, hover:0 };
+const startX = fine ? innerWidth * .76 : innerWidth / 2 - 62, startY = fine ? innerHeight * .74 : innerHeight * .9;   // phones: lower centre, clear of the text
+const pc_ = { x:startX, y:startY, rx:startX, ry:startY, seen:!fine, hover:0 };
 let idleSince = performance.now(), trail = [];
 function sizeCur(){ const d = Math.min(devicePixelRatio, 2); curCan.width = innerWidth * d; curCan.height = innerHeight * d; curCtx.setTransform(d, 0, 0, d, 0, 0); }
 sizeCur(); addEventListener('resize', sizeCur);
@@ -529,6 +576,7 @@ function loop(){
   uniforms.uSun.value.set(sun.x, sun.y); uniforms.uSunGain.value = sun.gain;
   uniforms.uTime.value = fixedTime ?? now;
   stepDive();
+  if (uniforms.tB.value) updateCopy();
   if (typeof tick === 'function' && uniforms.tB.value){ tick(now); stepWheel(dt); simStep(dt); drawCursor(dt); }
   renderer.render(scene, cam);
   requestAnimationFrame(loop);
