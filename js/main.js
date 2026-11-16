@@ -50,7 +50,7 @@ uniform sampler2D tPlate, tA, tB, tGlow, tStreak;
 uniform float uMix, uSoft, uRipT, uTilt;
 uniform sampler2D tSim; uniform vec2 uSimTexel;   // water surface simulation
 uniform float uCamY, uCross;
-uniform vec2 uUwCur, uUwVel; uniform float uUwAmt;   // underwater: cursor pocket of moving water                      // dive: camera offset (plate px) and surface-crossing strength
+uniform vec2 uUwCur, uUwVel; uniform float uUwAmt; uniform sampler2D tCopy;   // underwater: cursor pocket of moving water                      // dive: camera offset (plate px) and surface-crossing strength
 uniform float uK, uKt, uTy; uniform vec2 uC;   // responsive: card scale about uC, title scale anchored above the card
 uniform sampler2D tTitles;
 uniform vec2 uSun; uniform float uSunScale, uSunGain;
@@ -233,13 +233,15 @@ void main(){
                       sin(p.x * .012 + uTime * .7) * 1.6) * wob;
     // a pocket of moving water around the cursor: soft lens, a little swirl, dragged along with the motion
     vec2 dc = p - uUwCur; float rr = length(dc);
-    float fall = exp(-rr * rr / (2. * 190. * 190.)) * uUwAmt;
+    float fall = exp(-rr * rr / (2. * 170. * 170.)) * uUwAmt;
+    vec2 wv = vec2(0.);                                                      // the pocket's warp (plate px), shared with the text
     if (fall > .002){
-      q -= dc * .06 * fall;                                                  // gentle magnification
-      float ang = fall * (.2 + clamp(length(uUwVel) / 2500., 0., .35)) * sin(uTime * .8 + rr * .012);
-      q += vec2(cos(ang) * dc.x - sin(ang) * dc.y, sin(ang) * dc.x + cos(ang) * dc.y) - dc;   // swirl
-      q -= uUwVel * .018 * fall;                                             // pulled along by the current
-      q += vec2(fbm(p * .012 + uTime * .4) - .5, fbm(p * .012 - uTime * .35 + 5.) - .5) * 14. * fall;
+      wv -= dc * .028 * fall;                                                // gentle magnification
+      float ang = fall * (.07 + clamp(length(uUwVel) / 4000., 0., .12)) * sin(uTime * .8 + rr * .012);
+      wv += vec2(cos(ang) * dc.x - sin(ang) * dc.y, sin(ang) * dc.x + cos(ang) * dc.y) - dc;   // a little swirl
+      wv -= uUwVel * .007 * fall;                                            // pulled along by the current
+      wv += vec2(fbm(p * .012 + uTime * .4) - .5, fbm(p * .012 - uTime * .35 + 5.) - .5) * 6. * fall;
+      q += wv;
     }
     vec3 u = plate(q).rgb;
     // caustics dancing on the seabed
@@ -251,6 +253,10 @@ void main(){
     // passing through the surface: a bright, rippling band
     u += vec3(.45, .75, 1.) * uCross * .35 * exp(-pow((p.y - 1440.) / 160., 2.));
     col = mix(col, u, uw);
+    // the copy, drawn into the scene so the water bends it too
+    vec2 ts = (s + vec2(wv.x, -wv.y) * uScale) / uRes;
+    vec4 tc = texture2D(tCopy, ts);
+    col = col * (1. - tc.a) + tc.rgb;
   }
 
   col += (hash(s + fract(uTime)) - .5) / 255.;               // dither: no banding in the gradients
@@ -264,7 +270,7 @@ const scene = new THREE.Scene(), cam = new THREE.OrthographicCamera(-1,1,1,-1,0,
 const load = src => new Promise(r => new THREE.TextureLoader().load(src, t => { t.colorSpace = THREE.NoColorSpace; t.minFilter = THREE.LinearFilter; t.generateMipmaps = false; r(t); }));
 
 const uniforms = {
-  uCamY:{value:0}, uCross:{value:0}, uUwCur:{value:new THREE.Vector2(-9999, 0)}, uUwVel:{value:new THREE.Vector2()}, uUwAmt:{value:0},
+  uCamY:{value:0}, uCross:{value:0}, uUwCur:{value:new THREE.Vector2(-9999, 0)}, uUwVel:{value:new THREE.Vector2()}, uUwAmt:{value:0}, tCopy:{value:null},
   tSim:{value:null}, uSimTexel:{value:new THREE.Vector2(1/384, 1/1024)},
   uTilt:{value:0}, uK:{value:1}, uKt:{value:1}, uTy:{value:482}, uC:{value:new THREE.Vector2(1280, 640)}, tTitles:{value:null}, tPlate:{value:null}, tA:{value:null}, tB:{value:null}, tGlow:{value:null}, tStreak:{value:null},
   uMix:{value:1}, uSoft:{value:0}, uRipT:{value:-100},
@@ -306,46 +312,74 @@ const COPY = [
 ];
 const copyFont = document.createElement('link'); copyFont.rel = 'stylesheet';
 copyFont.href = 'https://fonts.googleapis.com/css2?family=Montserrat:wght@400&display=swap'; document.head.appendChild(copyFont);
-const copyCss = document.createElement('style');
-copyCss.textContent = `
-  #copy{position:fixed;left:50%;top:0;z-index:5;pointer-events:none;color:rgba(214,232,255,.82);
-    font:400 var(--fs,15px)/2.3 Montserrat,sans-serif;transform-origin:0 0}
-  #copy p{margin:0 0 1.15em;opacity:0;transform:translateY(14px);transition:opacity .9s ease,transform 1.1s cubic-bezier(.2,.8,.2,1)}
-  #copy.show p{opacity:1;transform:none}
-  #copy.show p:nth-child(2){transition-delay:.18s}
-  #copy.hide p{transition-duration:.35s}`;
-document.head.appendChild(copyCss);
-const copyEl = document.createElement('div'); copyEl.id = 'copy'; copyEl.setAttribute('aria-live', 'polite'); document.body.appendChild(copyEl);
-let copyFor = -1;
-function placeCopy(){
-  // anchored in the scene (plate px), like the reference: block about 1835px wide, text starting ~250px below the top of the underwater view
-  const narrow = innerWidth < 700;
-  const w = Math.min(1835 * view.sc, innerWidth * (narrow ? .86 : .8));
+const copyEl = document.createElement('div'); copyEl.id = 'copy'; copyEl.setAttribute('aria-live', 'polite');
+copyEl.style.cssText = 'position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap';
+document.body.appendChild(copyEl);
+const copyCan = document.createElement('canvas'), copyCtx = copyCan.getContext('2d');
+const copyTex = new THREE.CanvasTexture(copyCan);
+copyTex.colorSpace = THREE.NoColorSpace; copyTex.premultiplyAlpha = true; copyTex.generateMipmaps = false; copyTex.minFilter = THREE.LinearFilter;
+let copyFor = -1, copyShownAt = -1, copyHiddenAt = -1, copyParas = [], copyAlphaWas = 0, copyFadeFrom = 0, copyDirty = true;
+document.fonts.load('400 20px Montserrat').then(() => { copyDirty = true; }).catch(()=>{});
+const easeOut = x => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
+function drawCopy(now){
+  const dpr = renderer.getPixelRatio(), W = innerWidth, H = innerHeight;
+  if (copyCan.width !== Math.round(W * dpr) || copyCan.height !== Math.round(H * dpr)){
+    copyCan.width = Math.round(W * dpr); copyCan.height = Math.round(H * dpr); uniforms.tCopy.value = copyTex; copyDirty = true; }
+  // how visible each paragraph is: fades and drifts up after the dive settles, quick fade on the way back
+  const shown = copyShownAt >= 0 && copyHiddenAt < 0;
+  const alphas = copyParas.map((_, i) => shown ? easeOut((now - copyShownAt - i * .18) / .9)
+                                               : copyHiddenAt >= 0 ? copyFadeFrom * (1 - Math.min(1, (now - copyHiddenAt) / .35)) : 0);
+  const any = alphas.some(a => a > .001);
+  const animating = alphas.some(a => a > .001 && a < .999);
+  if (!any && !copyDirty && copyAlphaWas === 0) return;
+  if (!animating && !copyDirty && any) return;                             // nothing changed since the last draw
+  copyDirty = false;
+  copyCtx.setTransform(dpr, 0, 0, dpr, 0, 0); copyCtx.clearRect(0, 0, W, H);
+  if (!any){ copyAlphaWas = 0; copyTex.needsUpdate = true; return; }
+  const narrow = W < 700;
+  const w = Math.min(1835 * view.sc, W * (narrow ? .86 : .8));
+  const fs = Math.max(narrow ? 14 : 13, 30 * view.sc), lh = fs * 2.3;
   const top = (2880 - 1440 + 250 - dive.y) * view.sc + view.oy;
-  copyEl.style.width = w + 'px';
-  copyEl.style.setProperty('--fs', Math.max(narrow ? 14 : 13, 30 * view.sc).toFixed(1) + 'px');
-  copyEl.style.transform = `translate(${-w / 2}px, ${top}px)`;
+  copyCtx.font = `400 ${fs}px Montserrat, sans-serif`; copyCtx.textBaseline = 'middle';
+  let y = top + lh / 2;
+  copyParas.forEach((t, i) => {
+    const a = alphas[i];
+    copyCtx.fillStyle = `rgba(214,232,255,${(.82 * a).toFixed(3)})`;
+    const dy = (1 - a) * 14;
+    let line = '';
+    for (const word of t.split(' ')){
+      const test = line ? line + ' ' + word : word;
+      if (copyCtx.measureText(test).width > w && line){ copyCtx.fillText(line, (W - w) / 2, y + dy); y += lh; line = word; }
+      else line = test;
+    }
+    if (line){ copyCtx.fillText(line, (W - w) / 2, y + dy); y += lh; }
+    y += fs * 1.15;
+  });
+  copyAlphaWas = Math.max(...alphas);
+  copyTex.needsUpdate = true;
 }
 function updateCopy(){
+  const now = performance.now() / 1000;
   const settled = dive.under && !dive.moving;
   if (settled && copyFor !== cur){
     copyFor = cur;
-    const paras = innerWidth < 700 ? COPY[cur].slice(0, 1) : COPY[cur];   // phones: first paragraph only
-    copyEl.innerHTML = paras.map(t => `<p>${t.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</p>`).join('');
-    void copyEl.offsetWidth;
+    copyParas = innerWidth < 700 ? COPY[cur].slice(0, 1) : COPY[cur];     // phones: first paragraph only
+    copyEl.textContent = copyParas.join(' ');
+    copyShownAt = now; copyHiddenAt = -1;
   }
-  copyEl.classList.toggle('show', settled);
-  copyEl.classList.toggle('hide', !settled);
-  if (!dive.under && !dive.moving) copyFor = -1;
-  placeCopy();
+  if (!settled && copyShownAt >= 0 && copyHiddenAt < 0){ copyHiddenAt = now; copyFadeFrom = copyAlphaWas; }
+  if (dive.moving) copyDirty = true;                                        // the text rides with the camera
+  if (!dive.under && !dive.moving && copyHiddenAt >= 0 && now - copyHiddenAt > .4){ copyFor = -1; copyShownAt = -1; copyHiddenAt = -1; copyParas = []; copyDirty = true; }
+  drawCopy(now);
 }
+addEventListener('resize', () => { copyDirty = true; });
 
 const uwPocket = { x:-9999, y:0, vx:0, vy:0, boost:0, amt:0 };
 function stepPocket(dt){
   // a gentle pocket always sits under the cursor; moving stirs it up, then it settles
   uwPocket.boost *= Math.exp(-dt * 1.6);
   uwPocket.vx *= Math.exp(-dt * 2.5); uwPocket.vy *= Math.exp(-dt * 2.5);
-  const target = (dive.under && !dive.moving) ? (reduceTilt ? .2 : .35 + .65 * uwPocket.boost) : 0;
+  const target = (dive.under && !dive.moving) ? (reduceTilt ? .15 : .3 + .7 * uwPocket.boost) : 0;
   uwPocket.amt += (target - uwPocket.amt) * Math.min(1, dt * 4);
   uniforms.uUwCur.value.set(uwPocket.x, uwPocket.y);
   uniforms.uUwVel.value.set(uwPocket.vx, uwPocket.vy);
