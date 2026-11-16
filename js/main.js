@@ -49,7 +49,8 @@ precision highp float;
 uniform sampler2D tPlate, tA, tB, tGlow, tStreak;
 uniform float uMix, uSoft, uRipT, uTilt;
 uniform sampler2D tSim; uniform vec2 uSimTexel;   // water surface simulation
-uniform float uCamY, uCross;                      // dive: camera offset (plate px) and surface-crossing strength
+uniform float uCamY, uCross;
+uniform vec2 uUwCur, uUwVel; uniform float uUwAmt;   // underwater: cursor pocket of moving water                      // dive: camera offset (plate px) and surface-crossing strength
 uniform float uK, uKt, uTy; uniform vec2 uC;   // responsive: card scale about uC, title scale anchored above the card
 uniform sampler2D tTitles;
 uniform vec2 uSun; uniform float uSunScale, uSunGain;
@@ -230,6 +231,16 @@ void main(){
     float wob = 1. + uCross * 5.;                                      // crossing the surface: everything wobbles
     vec2 q = p + vec2(sin(p.y * .018 + uTime * .9) * 2.2 + sin(p.y * .041 - uTime * 1.3) * 1.2,
                       sin(p.x * .012 + uTime * .7) * 1.6) * wob;
+    // a pocket of moving water around the cursor: soft lens, a little swirl, dragged along with the motion
+    vec2 dc = p - uUwCur; float rr = length(dc);
+    float fall = exp(-rr * rr / (2. * 190. * 190.)) * uUwAmt;
+    if (fall > .002){
+      q -= dc * .06 * fall;                                                  // gentle magnification
+      float ang = fall * (.2 + clamp(length(uUwVel) / 2500., 0., .35)) * sin(uTime * .8 + rr * .012);
+      q += vec2(cos(ang) * dc.x - sin(ang) * dc.y, sin(ang) * dc.x + cos(ang) * dc.y) - dc;   // swirl
+      q -= uUwVel * .018 * fall;                                             // pulled along by the current
+      q += vec2(fbm(p * .012 + uTime * .4) - .5, fbm(p * .012 - uTime * .35 + 5.) - .5) * 14. * fall;
+    }
     vec3 u = plate(q).rgb;
     // caustics dancing on the seabed
     vec2 cq = vec2(p.x * .011, p.y * .028);
@@ -253,7 +264,7 @@ const scene = new THREE.Scene(), cam = new THREE.OrthographicCamera(-1,1,1,-1,0,
 const load = src => new Promise(r => new THREE.TextureLoader().load(src, t => { t.colorSpace = THREE.NoColorSpace; t.minFilter = THREE.LinearFilter; t.generateMipmaps = false; r(t); }));
 
 const uniforms = {
-  uCamY:{value:0}, uCross:{value:0},
+  uCamY:{value:0}, uCross:{value:0}, uUwCur:{value:new THREE.Vector2(-9999, 0)}, uUwVel:{value:new THREE.Vector2()}, uUwAmt:{value:0},
   tSim:{value:null}, uSimTexel:{value:new THREE.Vector2(1/384, 1/1024)},
   uTilt:{value:0}, uK:{value:1}, uKt:{value:1}, uTy:{value:482}, uC:{value:new THREE.Vector2(1280, 640)}, tTitles:{value:null}, tPlate:{value:null}, tA:{value:null}, tB:{value:null}, tGlow:{value:null}, tStreak:{value:null},
   uMix:{value:1}, uSoft:{value:0}, uRipT:{value:-100},
@@ -327,6 +338,18 @@ function updateCopy(){
   copyEl.classList.toggle('hide', !settled);
   if (!dive.under && !dive.moving) copyFor = -1;
   placeCopy();
+}
+
+const uwPocket = { x:-9999, y:0, vx:0, vy:0, boost:0, amt:0 };
+function stepPocket(dt){
+  // a gentle pocket always sits under the cursor; moving stirs it up, then it settles
+  uwPocket.boost *= Math.exp(-dt * 1.6);
+  uwPocket.vx *= Math.exp(-dt * 2.5); uwPocket.vy *= Math.exp(-dt * 2.5);
+  const target = (dive.under && !dive.moving) ? (reduceTilt ? .2 : .35 + .65 * uwPocket.boost) : 0;
+  uwPocket.amt += (target - uwPocket.amt) * Math.min(1, dt * 4);
+  uniforms.uUwCur.value.set(uwPocket.x, uwPocket.y);
+  uniforms.uUwVel.value.set(uwPocket.vx, uwPocket.vy);
+  uniforms.uUwAmt.value = uwPocket.amt;
 }
 
 // ---- the dive: hold to sink below the surface, click to come back up ----
@@ -413,7 +436,10 @@ let lastMove = { x:0, y:0, t:0 }, lastSim = null, lastDrip = 0;
 function rippleAt(cx, cy, force){
   const X = (cx - view.ox) / view.sc, Y = (cy - view.oy) / view.sc + dive.y;   // screen -> plate px
   if (dive.under){ const nowU = performance.now() / 1000;            // underwater: soft bubbles as you move
-    const sp = Math.hypot(cx - lastMove.x, cy - lastMove.y) / Math.max(nowU - lastMove.t, .008); lastMove = { x:cx, y:cy, t:nowU };
+    const sp = Math.hypot(cx - lastMove.x, cy - lastMove.y) / Math.max(nowU - lastMove.t, .008);
+    const dtU = Math.max(nowU - lastMove.t, .008);
+    uwPocket.vx += ((X - uwPocket.x) / dtU - uwPocket.vx) * .25; uwPocket.vy += ((Y - uwPocket.y) / dtU - uwPocket.vy) * .25;
+    uwPocket.x = X; uwPocket.y = Y; uwPocket.boost = Math.min(1, uwPocket.boost + sp / 2500); lastMove = { x:cx, y:cy, t:nowU };
     if (sp > 60 && nowU - lastDrip > .16){ lastDrip = nowU; sound.drip(clamp(sp / 1200, .15, .6)); } return; }
   const now = performance.now() / 1000;
   const speed = Math.hypot(cx - lastMove.x, cy - lastMove.y) / Math.max(now - lastMove.t, .008);   // css px/s
@@ -577,6 +603,7 @@ function loop(){
   uniforms.uTime.value = fixedTime ?? now;
   stepDive();
   if (uniforms.tB.value) updateCopy();
+  stepPocket(dt);
   if (typeof tick === 'function' && uniforms.tB.value){ tick(now); stepWheel(dt); simStep(dt); drawCursor(dt); }
   renderer.render(scene, cam);
   requestAnimationFrame(loop);
