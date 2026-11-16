@@ -48,7 +48,7 @@ const frag = `
 precision highp float;
 uniform sampler2D tPlate, tA, tB, tGlow, tStreak;
 uniform float uMix, uSoft, uRipT, uTilt;
-uniform sampler2D tSim; uniform vec2 uSimTexel;   // water surface simulation
+uniform sampler2D tSim; uniform vec2 uSimTexel; uniform float uSeabed;   // water simulation (on the surface, or on the seabed once you've dived)
 uniform float uCamY, uCross;
 uniform vec2 uUwCur, uUwVel; uniform float uUwAmt; uniform sampler2D tCopy;   // underwater: cursor pocket of moving water                      // dive: camera offset (plate px) and surface-crossing strength
 uniform float uK, uKt, uTy; uniform vec2 uC;   // responsive: card scale about uC, title scale anchored above the card
@@ -129,7 +129,7 @@ void main(){
   // live water surface (height-field simulation) disturbed by the cursor, laid on the sea in perspective
   float simD = max(p.y - uHorizon, 1.);
   vec2 suv = vec2(((p.x - ${PW/2}.) / simD + 2.2) / 4.4, (1. / simD - .0011806) * 206.2);   // flat on the sea: ripples read as thin ellipses
-  float simIn = below * step(0., suv.x) * step(suv.x, 1.) * step(0., suv.y) * step(suv.y, 1.);
+  float simIn = (1. - uSeabed) * below * step(0., suv.x) * step(suv.x, 1.) * step(0., suv.y) * step(suv.y, 1.);
   vec2 sg = vec2(0.);
   if (simIn > 0.){
     vec2 tx = uSimTexel;
@@ -245,11 +245,24 @@ void main(){
     }
     vec3 u = plate(q).rgb;
     // caustics dancing on the seabed
-    vec2 cq = vec2(p.x * .011, p.y * .028);
+    // the cursor stirs the caustic light: same simulation and strength as the surface, laid flat on the sand
+    float sd = max(p.y - 2470., 1.);
+    vec2 bv = vec2(((p.x - ${PW/2}.) / sd + 3.4) / 6.8, (1. / sd - 1. / 410.) * 64.);
+    vec2 bg = vec2(0.);
+    if (uSeabed > .5 && bv.x > 0. && bv.x < 1. && bv.y > 0. && bv.y < 1.){
+      vec2 tx = uSimTexel;
+      bg = vec2(texture2D(tSim, bv + vec2(tx.x, 0.)).r - texture2D(tSim, bv - vec2(tx.x, 0.)).r,
+                texture2D(tSim, bv + vec2(0., tx.y)).r - texture2D(tSim, bv - vec2(0., tx.y)).r);
+      bg *= clamp(sd / 300., .1, 1.4) * (1. - smoothstep(.85, 1., bv.y)) * smoothstep(0., .04, bv.x) * smoothstep(1., .96, bv.x);
+    }
+    vec2 cp2 = p + vec2(bg.x, -bg.y * .6) * 420.;
+    vec2 cq = vec2(cp2.x * .011, cp2.y * .028);
     float c1 = fbm(cq + vec2(uTime * .35, uTime * .21)), c2 = fbm(cq * 1.7 - vec2(uTime * .28, -uTime * .33) + 4.);
     float caus = pow(1. - abs(c1 - c2) * 3.2, 6.);
     float floorM = smoothstep(2470., 2560., p.y) * smoothstep(.12, .45, dot(u, vec3(.3, .5, .2)));   // only on the sand, below the far seabed line
+    caus *= 1. + clamp(length(bg) * 25., 0., 1.2);                          // stirred light shimmers a little brighter
     u += vec3(.32, .62, .85) * clamp(caus, 0., 1.) * floorM * .55;
+    u += vec3(.16, .24, .32) * clamp(-bg.y * 20. - bg.x * 7., -.2, .6) * .35 * floorM;
     // passing through the surface: a bright, rippling band
     u += vec3(.45, .75, 1.) * uCross * .35 * exp(-pow((p.y - 1440.) / 160., 2.));
     col = mix(col, u, uw);
@@ -271,7 +284,7 @@ const load = src => new Promise(r => new THREE.TextureLoader().load(src, t => { 
 
 const uniforms = {
   uCamY:{value:0}, uCross:{value:0}, uUwCur:{value:new THREE.Vector2(-9999, 0)}, uUwVel:{value:new THREE.Vector2()}, uUwAmt:{value:0}, tCopy:{value:null},
-  tSim:{value:null}, uSimTexel:{value:new THREE.Vector2(1/384, 1/1024)},
+  tSim:{value:null}, uSeabed:{value:0}, uSimTexel:{value:new THREE.Vector2(1/384, 1/1024)},
   uTilt:{value:0}, uK:{value:1}, uKt:{value:1}, uTy:{value:482}, uC:{value:new THREE.Vector2(1280, 640)}, tTitles:{value:null}, tPlate:{value:null}, tA:{value:null}, tB:{value:null}, tGlow:{value:null}, tStreak:{value:null},
   uMix:{value:1}, uSoft:{value:0}, uRipT:{value:-100},
   uSun:{value:new THREE.Vector2(...SUN_REST)}, uSunScale:{value:1}, uSunGain:{value:1},
@@ -393,6 +406,7 @@ const dive = { y:0, from:0, to:0, start:-1, under:false, moving:false };
 function diveMax(){ return 2880 - (innerHeight - view.oy) / view.sc; }      // camera offset that shows the seabed at the bottom of the screen
 function goDive(down){
   if (dive.moving || down === dive.under) return;
+  setSimMode('surface');
   dive.from = dive.y; dive.to = down ? diveMax() : 0; dive.start = performance.now() / 1000; dive.moving = true; dive.under = down;
   sound.dive(down);
 }
@@ -403,7 +417,7 @@ function stepDive(){
     const e = m < .5 ? 4 * m * m * m : 1 - Math.pow(-2 * m + 2, 3) / 2;   // ease in-out
     dive.y = dive.from + (dive.to - dive.from) * e;
     uniforms.uCross.value = reduceTilt ? 0 : Math.pow(Math.sin(Math.PI * m), 2);
-    if (m >= 1){ dive.moving = false; uniforms.uCross.value = 0; }
+    if (m >= 1){ dive.moving = false; uniforms.uCross.value = 0; if (dive.under) setSimMode('seabed'); }
   } else if (dive.under) dive.y = diveMax();                         // stay on the seabed if the window resizes
   uniforms.uCamY.value = dive.y;   
 }
@@ -466,7 +480,29 @@ function simStep(dt){
   renderer.setRenderTarget(null);
   uniforms.tSim.value = simRT[simCur].texture;
 }
-const toSim = (X, Y) => { const d = Math.max(Y - HORIZON, 1); return [((X - PW / 2) / d + 2.2) / 4.4, (1 / d - .0011806) * 206.2]; };
+const toSim = (X, Y) => {
+  if (simMode === 'seabed'){ const d = Math.max(Y - 2470, 1); return [((X - PW / 2) / d + 3.4) / 6.8, (1 / d - 1 / 410) * 64]; }
+  const d = Math.max(Y - HORIZON, 1); return [((X - PW / 2) / d + 2.2) / 4.4, (1 / d - .0011806) * 206.2];
+};
+let simMode = 'surface';
+function setSimMode(m){
+  if (m === simMode) return;
+  simMode = m; uniforms.uSeabed.value = m === 'seabed' ? 1 : 0;
+  pending = []; lastSim = null;
+  [0, 1].forEach(i => { renderer.setRenderTarget(simRT[i]); renderer.setClearColor(0x000000, 0); renderer.clear(); });
+  renderer.setRenderTarget(null);
+}
+function stirSim(X, Y, speed, force){
+  const [u, v] = toSim(X, Y);
+  if (u < 0 || u > 1 || v < 0 || v > 1){ lastSim = null; return false; }
+  const s = force ? .3 : clamp(speed / 1400, .08, .7) * (reduceTilt ? .5 : 1);
+  // push along the path since the last event, so a moving cursor leaves a continuous wake
+  const from = lastSim || [u, v], steps = Math.min(10, Math.max(1, Math.ceil(Math.hypot(u - from[0], v - from[1]) / .006)));
+  for (let i = 1; i <= steps; i++){ const f = i / steps; pending.push([from[0] + (u - from[0]) * f, from[1] + (v - from[1]) * f, force ? 1. : 1.2, s / steps * 1.8]); }
+  if (pending.length > 64) pending.splice(0, pending.length - 64);
+  lastSim = [u, v];
+  return true;
+}
 let lastMove = { x:0, y:0, t:0 }, lastSim = null, lastDrip = 0;
 function rippleAt(cx, cy, force){
   const X = (cx - view.ox) / view.sc, Y = (cy - view.oy) / view.sc + dive.y;   // screen -> plate px
@@ -475,19 +511,14 @@ function rippleAt(cx, cy, force){
     const dtU = Math.max(nowU - lastMove.t, .008);
     uwPocket.vx += ((X - uwPocket.x) / dtU - uwPocket.vx) * .25; uwPocket.vy += ((Y - uwPocket.y) / dtU - uwPocket.vy) * .25;
     uwPocket.x = X; uwPocket.y = Y; uwPocket.boost = Math.min(1, uwPocket.boost + sp / 2500); lastMove = { x:cx, y:cy, t:nowU };
-    if (sp > 60 && nowU - lastDrip > .16){ lastDrip = nowU; sound.drip(clamp(sp / 1200, .15, .6)); } return; }
+    if (sp > 60 && nowU - lastDrip > .16){ lastDrip = nowU; sound.drip(clamp(sp / 1200, .15, .6)); }
+    if (simMode === 'seabed' && Y > 2470) stirSim(X, Y, sp, force); else lastSim = null;
+    return; }
   const now = performance.now() / 1000;
   const speed = Math.hypot(cx - lastMove.x, cy - lastMove.y) / Math.max(now - lastMove.t, .008);   // css px/s
   lastMove = { x:cx, y:cy, t:now };
   if (Y < HORIZON + 6){ lastSim = null; return; }                     // only the water moves
-  const [u, v] = toSim(X, Y);
-  if (u < 0 || u > 1 || v < 0 || v > 1){ lastSim = null; return; }
-  const s = force ? .3 : clamp(speed / 1400, .08, .7) * (reduceTilt ? .5 : 1);
-  // push along the path since the last event, so a moving cursor leaves a continuous wake
-  const from = lastSim || [u, v], steps = Math.min(10, Math.max(1, Math.ceil(Math.hypot(u - from[0], v - from[1]) / .006)));
-  for (let i = 1; i <= steps; i++){ const f = i / steps; pending.push([from[0] + (u - from[0]) * f, from[1] + (v - from[1]) * f, force ? 1. : 1.2, s / steps * 1.8]); }
-  if (pending.length > 64) pending.splice(0, pending.length - 64);
-  lastSim = [u, v];
+  if (!stirSim(X, Y, speed, force)) return;
   if (force || (speed > 60 && now - lastDrip > .11)){ lastDrip = now; sound.drip(force ? 1 : clamp(speed / 900, .2, 1)); }
 }
 
