@@ -8,7 +8,29 @@
 
 import * as THREE from 'three';
 
-const PLATE = 'assets/water-plate.jpg';     // clean water plate, no sun
+// ---- entry screen: shows on the loading blue; entering starts the water sounds ----
+let entered = false;
+const intro = document.createElement('div');
+intro.innerHTML = '<button id="enterBtn" disabled><span class="txt">ENTER WATER CONCEPT</span></button>';
+const introCss = document.createElement('style');
+introCss.textContent = `
+  #intro{position:fixed;inset:0;z-index:30;background:#0a46ff;display:grid;place-items:center;cursor:auto!important;transition:opacity 1s ease .1s}
+  #intro.out{opacity:0;pointer-events:none}
+  #enterBtn{all:unset;display:flex;align-items:center;gap:18px;color:#fff;cursor:pointer!important;opacity:.35;transition:opacity .6s}
+  #enterBtn:not([disabled]){opacity:1}
+  #enterBtn .txt{transition:opacity .3s}
+  #enterBtn:not([disabled]):hover .txt{opacity:.7}
+  #enterBtn .txt{font:500 13px/1 Archivo,sans-serif;font-stretch:125%;font-variation-settings:"wdth" 125;letter-spacing:-.02em}
+  #enterBtn:focus-visible{outline:1px solid rgba(255,255,255,.6);outline-offset:8px}`;
+document.head.appendChild(introCss);
+intro.id = 'intro'; document.body.appendChild(intro);
+const introFont = document.createElement('link'); introFont.rel = 'stylesheet';
+introFont.href = 'https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,500&display=swap'; document.head.appendChild(introFont);
+document.getElementById('enterBtn').addEventListener('click', () => {
+  entered = true; sound.start(); intro.classList.add('out'); setTimeout(() => intro.remove(), 1300);
+});
+
+const PLATE = 'assets/water-plate-tall.jpg';   // tall plate: surface (no sun) on top, underwater below
 const GLOW  = 'assets/sun-glow.png';        // sun glow layer (alpha, normalized)
 const STREAK = 'assets/water-streaks.png';  // bright streaks of the plate (drives the sun path)
 // films, in play order: Black Phone, Violent Night, Nope, Monkey Man (starts on Violent Night, like the comp)
@@ -27,6 +49,7 @@ precision highp float;
 uniform sampler2D tPlate, tA, tB, tGlow, tStreak;
 uniform float uMix, uSoft, uRipT, uTilt;
 uniform sampler2D tSim; uniform vec2 uSimTexel;   // water surface simulation
+uniform float uCamY, uCross;                      // dive: camera offset (plate px) and surface-crossing strength
 uniform float uK, uKt, uTy; uniform vec2 uC;   // responsive: card scale about uC, title scale anchored above the card
 uniform sampler2D tTitles;
 uniform vec2 uSun; uniform float uSunScale, uSunGain;
@@ -38,7 +61,7 @@ float vn(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.-2.*f);
   return mix(mix(hash(i),hash(i+vec2(1,0)),f.x), mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x), f.y); }
 float fbm(vec2 p){ float v=0., a=.5; for(int k=0;k<4;k++){ v+=a*vn(p); p=p*2.07+vec2(3.1,1.7); a*=.5; } return v; }
 
-vec4 plate(vec2 p){ return texture2D(tPlate, vec2(p.x/${PW}., 1. - p.y/${PH}.)); }
+vec4 plate(vec2 p){ return texture2D(tPlate, vec2(p.x/${PW}., 1. - p.y/2880.)); }   // tall plate: surface on top, underwater below
 vec3 filmAt(sampler2D t, vec2 c){ return texture2D(t, vec2(c.x, 1. - c.y)).rgb; }
 // liquid dissolve: the films melt into each other through soft organic patches,
 // both refracting gently as if seen through moving water; no hard edge
@@ -82,7 +105,7 @@ float swell(vec2 p){
 
 void main(){
   vec2 s = gl_FragCoord.xy;
-  vec2 p = vec2((s.x - uOff.x) / uScale, (uRes.y - s.y - uOff.y) / uScale);   // plate px, y down
+  vec2 p = vec2((s.x - uOff.x) / uScale, (uRes.y - s.y - uOff.y) / uScale + uCamY);   // plate px, y down (camera moves for the dive)
   float below = step(uHorizon + 1., p.y);
   float depth = clamp((p.y - uHorizon) / (${PH}. - uHorizon), 0., 1.);
 
@@ -201,6 +224,24 @@ void main(){
     col = screen(col, vec3(.55, .8, 1.) * sheen * .12 * alpha * uSunGain);
   }
 
+  // ---- underwater: the lower half of the tall plate, seen through moving water ----
+  float uw = smoothstep(1240., 1640., p.y);
+  if (uw > 0.){
+    float wob = 1. + uCross * 5.;                                      // crossing the surface: everything wobbles
+    vec2 q = p + vec2(sin(p.y * .018 + uTime * .9) * 2.2 + sin(p.y * .041 - uTime * 1.3) * 1.2,
+                      sin(p.x * .012 + uTime * .7) * 1.6) * wob;
+    vec3 u = plate(q).rgb;
+    // caustics dancing on the seabed
+    vec2 cq = vec2(p.x * .011, p.y * .028);
+    float c1 = fbm(cq + vec2(uTime * .35, uTime * .21)), c2 = fbm(cq * 1.7 - vec2(uTime * .28, -uTime * .33) + 4.);
+    float caus = pow(1. - abs(c1 - c2) * 3.2, 6.);
+    float floorM = smoothstep(2280., 2620., p.y) * smoothstep(.12, .45, dot(u, vec3(.3, .5, .2)));
+    u += vec3(.32, .62, .85) * clamp(caus, 0., 1.) * floorM * .55;
+    // passing through the surface: a bright, rippling band
+    u += vec3(.45, .75, 1.) * uCross * .35 * exp(-pow((p.y - 1440.) / 160., 2.));
+    col = mix(col, u, uw);
+  }
+
   col += (hash(s + fract(uTime)) - .5) / 255.;               // dither: no banding in the gradients
   gl_FragColor = vec4(col, 1.);
 }`;
@@ -212,6 +253,7 @@ const scene = new THREE.Scene(), cam = new THREE.OrthographicCamera(-1,1,1,-1,0,
 const load = src => new Promise(r => new THREE.TextureLoader().load(src, t => { t.colorSpace = THREE.NoColorSpace; t.minFilter = THREE.LinearFilter; t.generateMipmaps = false; r(t); }));
 
 const uniforms = {
+  uCamY:{value:0}, uCross:{value:0},
   tSim:{value:null}, uSimTexel:{value:new THREE.Vector2(1/384, 1/1024)},
   uTilt:{value:0}, uK:{value:1}, uKt:{value:1}, uTy:{value:482}, uC:{value:new THREE.Vector2(1280, 640)}, tTitles:{value:null}, tPlate:{value:null}, tA:{value:null}, tB:{value:null}, tGlow:{value:null}, tStreak:{value:null},
   uMix:{value:1}, uSoft:{value:0}, uRipT:{value:-100},
@@ -241,6 +283,27 @@ function resize(){
 }
 
 let fixedTime = null;   // set to a number to freeze the water (handy for screenshots)
+// ---- the dive: hold to sink below the surface, click to come back up ----
+const DIVE_T = 2.6, HOLD_T = .9;
+const dive = { y:0, from:0, to:0, start:-1, under:false, moving:false };
+function diveMax(){ return 2880 - (innerHeight - view.oy) / view.sc; }      // camera offset that shows the seabed at the bottom of the screen
+function goDive(down){
+  if (dive.moving || down === dive.under) return;
+  dive.from = dive.y; dive.to = down ? diveMax() : 0; dive.start = performance.now() / 1000; dive.moving = true; dive.under = down;
+  sound.dive(down);
+}
+function stepDive(){
+  if (dive.moving){
+    const dur = reduceTilt ? .9 : DIVE_T;
+    const m = Math.min(1, (performance.now() / 1000 - dive.start) / dur);
+    const e = m < .5 ? 4 * m * m * m : 1 - Math.pow(-2 * m + 2, 3) / 2;   // ease in-out
+    dive.y = dive.from + (dive.to - dive.from) * e;
+    uniforms.uCross.value = reduceTilt ? 0 : Math.pow(Math.sin(Math.PI * m), 2);
+    if (m >= 1){ dive.moving = false; uniforms.uCross.value = 0; }
+  } else if (dive.under) dive.y = diveMax();                         // stay on the seabed if the window resizes
+  uniforms.uCamY.value = dive.y;   
+}
+
 // ---- the light follows the cursor: heavy, eased, kept inside a range ----
 const clamp = (v,a,b) => Math.min(b, Math.max(a, v));
 const TILT_MAX = 5 * Math.PI / 180;            // about 5 degrees at the screen edge
@@ -248,7 +311,7 @@ const tilt = { v:0, t:0 };
 const sun = { x:SUN_REST[0], y:SUN_REST[1], tx:SUN_REST[0], ty:SUN_REST[1], gain:1, tgain:1 };
 function aim(cx, cy){
   tilt.t = Math.max(-1, Math.min(1, (cx / innerWidth) * 2 - 1)) * TILT_MAX;   // cursor right -> right side swings away
-  const px = (cx - view.ox) / view.sc, py = (cy - view.oy) / view.sc;      // screen -> plate px
+  const px = (cx - view.ox) / view.sc, py = (cy - view.oy) / view.sc + dive.y;   // screen -> plate px
   sun.tx = clamp(px - 41, SUN_MIN[0], SUN_MAX[0]);
   sun.ty = clamp(py + 177, SUN_MIN[1], SUN_MAX[1]);
   const d = Math.hypot(px - (sun.x + 41), py - (sun.y - 177));
@@ -302,7 +365,10 @@ function simStep(dt){
 const toSim = (X, Y) => { const d = Math.max(Y - HORIZON, 1); return [((X - PW / 2) / d + 2.2) / 4.4, (1 / d - .0011806) * 206.2]; };
 let lastMove = { x:0, y:0, t:0 }, lastSim = null, lastDrip = 0;
 function rippleAt(cx, cy, force){
-  const X = (cx - view.ox) / view.sc, Y = (cy - view.oy) / view.sc;   // screen -> plate px
+  const X = (cx - view.ox) / view.sc, Y = (cy - view.oy) / view.sc + dive.y;   // screen -> plate px
+  if (dive.under){ const nowU = performance.now() / 1000;            // underwater: soft bubbles as you move
+    const sp = Math.hypot(cx - lastMove.x, cy - lastMove.y) / Math.max(nowU - lastMove.t, .008); lastMove = { x:cx, y:cy, t:nowU };
+    if (sp > 60 && nowU - lastDrip > .16){ lastDrip = nowU; sound.drip(clamp(sp / 1200, .15, .6)); } return; }
   const now = performance.now() / 1000;
   const speed = Math.hypot(cx - lastMove.x, cy - lastMove.y) / Math.max(now - lastMove.t, .008);   // css px/s
   lastMove = { x:cx, y:cy, t:now };
@@ -320,10 +386,12 @@ function rippleAt(cx, cy, force){
 
 // ---- water sounds: synthesized with Web Audio (off until the visitor turns it on) ----
 const sound = (() => {
-  let ac = null, master = null, on = false, noiseBuf = null;
+  let ac = null, master = null, muffle = null, on = false, noiseBuf = null;
   function init(){
     ac = new (window.AudioContext || window.webkitAudioContext)();
-    master = ac.createGain(); master.gain.value = 0; master.connect(ac.destination);
+    master = ac.createGain(); master.gain.value = 0;
+    muffle = ac.createBiquadFilter(); muffle.type = 'lowpass'; muffle.frequency.value = 18000; muffle.Q.value = .7;
+    master.connect(muffle).connect(ac.destination);
     // noise for the little splashes
     noiseBuf = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
     const d = noiseBuf.getChannelData(0); let b = 0;
@@ -356,7 +424,23 @@ const sound = (() => {
     master.gain.setTargetAtTime(on ? .9 : 0, ac.currentTime, .25);
     return on;
   }
-  return { drip, toggle, get on(){ return on; } };
+  function start(){ if (!on) toggle(); }
+  function dive(down){
+    if (!on || !ac) return;
+    const t = ac.currentTime;
+    muffle.frequency.cancelScheduledValues(t);
+    muffle.frequency.setValueAtTime(muffle.frequency.value, t);
+    muffle.frequency.exponentialRampToValueAtTime(down ? 900 : 18000, t + (down ? 1.6 : 1.8));   // sound goes dull underwater
+    // a rush of water through the surface
+    const n = ac.createBufferSource(); n.buffer = noiseBuf; n.loop = true; n.playbackRate.value = 2.2;
+    const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = .8;
+    bp.frequency.setValueAtTime(down ? 2400 : 500, t); bp.frequency.exponentialRampToValueAtTime(down ? 450 : 2600, t + 1.5);
+    const g = ac.createGain(); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(.12, t + .5); g.gain.exponentialRampToValueAtTime(.0008, t + 2.2);
+    n.connect(bp).connect(g).connect(ac.destination); n.start(t); n.stop(t + 2.3);
+    // a few bubbles on the way
+    for (let i = 0; i < 9; i++) setTimeout(() => drip(.35 + Math.random() * .4), 250 + i * 160 + Math.random() * 120);
+  }
+  return { drip, toggle, start, dive, get on(){ return on; } };
 })();
 
 // ---- custom cursor: dot + trailing ring, "SOUND ON" prompt when the cursor rests ----
@@ -371,14 +455,11 @@ cssC.textContent = `
     font:500 13px/1 Archivo,sans-serif;font-stretch:125%;font-variation-settings:"wdth" 125;letter-spacing:-.02em;white-space:nowrap;
     clip-path:inset(0 100% 0 0);opacity:0;transition:clip-path .55s cubic-bezier(.2,.8,.2,1),opacity .35s}
   #curLabel.show{clip-path:inset(0 0 0 0);opacity:1}
-  #soundBtn{position:fixed;inset:auto 0 0 auto;width:1px;height:1px;opacity:0}`;
+`;
 document.head.appendChild(cssC);
 const curCan = document.createElement('canvas'); curCan.id = 'cur'; document.body.appendChild(curCan);
 const curCtx = curCan.getContext('2d');
-const label = document.createElement('div'); label.id = 'curLabel'; label.textContent = 'SOUND ON'; document.body.appendChild(label);
-const soundBtn = document.createElement('button'); soundBtn.id = 'soundBtn'; soundBtn.setAttribute('aria-label', 'Turn sound on'); document.body.appendChild(soundBtn);
-function setSound(){ const on = sound.toggle(); label.textContent = on ? 'SOUND OFF' : 'SOUND ON'; soundBtn.setAttribute('aria-label', on ? 'Turn sound off' : 'Turn sound on'); idleSince = performance.now(); }
-soundBtn.addEventListener('click', e => { e.stopPropagation(); setSound(); });
+const label = document.createElement('div'); label.id = 'curLabel'; label.textContent = 'HOLD TO DIVE'; document.body.appendChild(label);
 
 const pc_ = { x:innerWidth * .76, y:innerHeight * .74, rx:innerWidth * .76, ry:innerHeight * .74, seen:!fine, hover:0 };
 let idleSince = performance.now(), trail = [];
@@ -390,7 +471,21 @@ addEventListener('pointermove', e => {
 });
 addEventListener('pointerdown', e => rippleAt(e.clientX, e.clientY, true));
 document.documentElement.addEventListener('pointerleave', () => { if (fine) pc_.seen = false; });
-addEventListener('click', e => { if (!titleAt(e.clientX, e.clientY)) setSound(); });
+// hold to dive (at the surface), click to return (underwater)
+let hold = null, pressT = 0;
+addEventListener('pointerdown', e => {
+  if (!entered || dive.moving) return;
+  if (dive.under){ hold = { t:performance.now(), up:true }; return; }
+  hold = { t:performance.now(), up:false };                         // holding works anywhere, titles included
+  pressT = performance.now();
+});
+addEventListener('pointerup', () => {
+  if (hold && hold.up && performance.now() - hold.t < 600) goDive(false);
+  hold = null;
+});
+addEventListener('pointercancel', () => { hold = null; });
+addEventListener('contextmenu', e => { if (hold) e.preventDefault(); });
+addEventListener('keydown', e => { if (e.key === 'Enter' && entered) goDive(!dive.under); });   // keyboard: Enter dives / returns
 
 function drawCursor(dt){
   const W = innerWidth, H = innerHeight;
@@ -404,8 +499,10 @@ function drawCursor(dt){
   const R = 22 + pc_.hover * 8;
   // resting: the ring draws itself around the dot, then breathes
   const idle = (performance.now() - idleSince) / 1000;
-  const resting = idle > .45 && lag < 2;
-  const sweep = resting ? Math.min(1, (idle - .45) / .8) : 0;
+  const holdP = hold && !hold.up ? Math.min(1, (performance.now() - hold.t) / 1000 / HOLD_T) : 0;
+  if (holdP >= 1){ hold = null; goDive(true); }
+  const resting = (idle > .45 && lag < 2 || holdP > 0) && !dive.moving;
+  const sweep = holdP > 0 ? holdP : resting ? Math.min(1, (idle - .45) / .8) : 0;
   const ease = 1 - Math.pow(1 - sweep, 3);
   const breathe = resting && sweep >= 1 ? Math.sin((idle - 1.25) * 2.2) * 1.5 : 0;
   curCtx.lineWidth = 1.2;
@@ -417,7 +514,8 @@ function drawCursor(dt){
   }
   curCtx.fillStyle = '#fff'; curCtx.beginPath(); curCtx.arc(pc_.x, pc_.y, 2, 0, 7); curCtx.fill();
   // the prompt appears to the right of the ring while resting, and clears as soon as the cursor moves
-  const showLabel = resting && wheel.hover < 0;
+  label.textContent = dive.under ? 'CLICK TO RETURN' : 'HOLD TO DIVE';
+  const showLabel = resting && (wheel.hover < 0 || holdP > 0) && entered;
   label.classList.toggle('show', showLabel);
   label.style.transform = `translate(${pc_.rx + R + 18}px, ${pc_.ry - 6}px)`;
 }
@@ -430,6 +528,7 @@ function loop(){
   tilt.v += (tilt.t - tilt.v) * (1 - Math.exp(-dt * 2.4)); uniforms.uTilt.value = reduceTilt ? 0 : tilt.v;
   uniforms.uSun.value.set(sun.x, sun.y); uniforms.uSunGain.value = sun.gain;
   uniforms.uTime.value = fixedTime ?? now;
+  stepDive();
   if (typeof tick === 'function' && uniforms.tB.value){ tick(now); stepWheel(dt); simStep(dt); drawCursor(dt); }
   renderer.render(scene, cam);
   requestAnimationFrame(loop);
@@ -493,6 +592,7 @@ function stepWheel(dt){
   drawTitles();
 }
 function titleAt(cx, cy){
+  if (dive.y > 1) return null;                                            // titles only at the surface
   const X = (cx - view.ox) / view.sc, Y = (cy - view.oy) / view.sc;      // plate px
   const px = 1280 + (X - 1280) / view.kt, py = 482 + (Y - view.ty) / view.kt;   // title space
   const qx = C[0] + (X - C[0]) / view.k, qy = C[1] + (Y - C[1]) / view.k;       // card space
@@ -501,7 +601,8 @@ function titleAt(cx, cy){
   return hit || null;
 }
 addEventListener('pointermove', e => { const h = titleAt(e.clientX, e.clientY); wheel.hover = h ? h.i : -1; if (!fine) document.body.style.cursor = h ? 'pointer' : ''; });
-addEventListener('click', e => { const h = titleAt(e.clientX, e.clientY); if (h) userStep(Math.sign(h.o)); });
+addEventListener('click', e => { if (performance.now() - pressT > 300) return;   // a long press is a hold, not a title click
+  const h = titleAt(e.clientX, e.clientY); if (h) userStep(Math.sign(h.o)); });
 
 // ---- film rotation: plays on its own; scroll / swipe / arrow keys step through it ----
 const N = FILMS.length, reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -523,6 +624,7 @@ function show(i, dir = 1, dur = FLOOD){
 // the menu and the image move as one: a new step is accepted only once the current blend is mostly done
 function canStep(){ return !flood || (clock.getElapsedTime() - flood.start) / flood.dur > .65; }
 function userStep(dir){
+  if (dive.y > 1 || dive.moving) return false;
   pausedUntil = clock.getElapsedTime() + IDLE;
   if (!canStep()) return false;
   show(cur + dir, dir, USER_FLOOD); return true;
@@ -542,6 +644,7 @@ function tick(t){
   if (flood){ const m = Math.min(1, (t - flood.start) / flood.dur); uniforms.uMix.value = reduce ? m : 1 - Math.pow(1 - m, 3);   // fast start, soft landing: lands with the wheel
     if (m >= 1){ flood = null; uniforms.tA.value = uniforms.tB.value; uniforms.uMix.value = 1; } }
   else uniforms.uMix.value = mixHold ?? 1;
-  if (!flood && t >= nextAt && t >= pausedUntil) show(cur + 1, 1);
+  if (!flood && t >= nextAt && t >= pausedUntil && dive.y < 1) show(cur + 1, 1);
 }
 addEventListener('resize', resize); resize(); loop();
+const enterBtn = document.getElementById('enterBtn'); enterBtn.disabled = false;
