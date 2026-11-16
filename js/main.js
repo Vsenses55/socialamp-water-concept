@@ -379,7 +379,8 @@ function stepPocket(dt){
   // a gentle pocket always sits under the cursor; moving stirs it up, then it settles
   uwPocket.boost *= Math.exp(-dt * 1.6);
   uwPocket.vx *= Math.exp(-dt * 2.5); uwPocket.vy *= Math.exp(-dt * 2.5);
-  const target = (dive.under && !dive.moving) ? (reduceTilt ? .15 : .3 + .7 * uwPocket.boost) : 0;
+  const UW_WARP = false;                                                  // underwater warp is parked for now; set true to bring it back
+  const target = (UW_WARP && dive.under && !dive.moving) ? (reduceTilt ? .15 : .3 + .7 * uwPocket.boost) : 0;
   uwPocket.amt += (target - uwPocket.amt) * Math.min(1, dt * 4);
   uniforms.uUwCur.value.set(uwPocket.x, uwPocket.y);
   uniforms.uUwVel.value.set(uwPocket.vx, uwPocket.vy);
