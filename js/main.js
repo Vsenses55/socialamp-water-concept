@@ -330,21 +330,26 @@ const copyEl = document.createElement('div'); copyEl.id = 'copy'; copyEl.setAttr
 copyEl.style.cssText = 'position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap';
 document.body.appendChild(copyEl);
 const copyCan = document.createElement('canvas'), copyCtx = copyCan.getContext('2d');
-const copyTex = new THREE.CanvasTexture(copyCan);
-copyTex.colorSpace = THREE.NoColorSpace; copyTex.premultiplyAlpha = true; copyTex.generateMipmaps = false; copyTex.minFilter = THREE.LinearFilter;
-let copyFor = -1, copyShownAt = -1, copyHiddenAt = -1, copyParas = [], copyAlphaWas = 0, copyFadeFrom = 0, copyDirty = true;
+let copyTex = null;
+function makeCopyTex(){                                                     // a texture can't change size once uploaded: rebuild it when the window does
+  if (copyTex) copyTex.dispose();
+  copyTex = new THREE.CanvasTexture(copyCan);
+  copyTex.colorSpace = THREE.NoColorSpace; copyTex.premultiplyAlpha = true; copyTex.generateMipmaps = false; copyTex.minFilter = THREE.LinearFilter;
+  uniforms.tCopy.value = copyTex;
+}
+let copyNarrow = false, copyFor = -1, copyShownAt = -1, copyHiddenAt = -1, copyParas = [], copyAlphaWas = 0, copyFadeFrom = 0, copyDirty = true;
 document.fonts.load('400 20px Montserrat').then(() => { copyDirty = true; }).catch(()=>{});
 const easeOut = x => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
 function drawCopy(now){
   const dpr = renderer.getPixelRatio(), W = innerWidth, H = innerHeight;
   if (copyCan.width !== Math.round(W * dpr) || copyCan.height !== Math.round(H * dpr)){
-    copyCan.width = Math.round(W * dpr); copyCan.height = Math.round(H * dpr); uniforms.tCopy.value = copyTex; copyDirty = true; }
+    copyCan.width = Math.round(W * dpr); copyCan.height = Math.round(H * dpr); makeCopyTex(); copyDirty = true; }
   // how visible each paragraph is: fades and drifts up after the dive settles, quick fade on the way back
   const shown = copyShownAt >= 0 && copyHiddenAt < 0;
   const alphas = copyParas.map((_, i) => shown ? easeOut((now - copyShownAt - i * .18) / .9)
                                                : copyHiddenAt >= 0 ? copyFadeFrom * (1 - Math.min(1, (now - copyHiddenAt) / .35)) : 0);
   const any = alphas.some(a => a > .001);
-  const animating = alphas.some(a => a > .001 && a < .999);
+  const animating = alphas.some(a => a > .001 && a < .999) || (shown && now - copyShownAt < 1.6) || (copyHiddenAt >= 0 && now - copyHiddenAt < .5);
   if (!any && !copyDirty && copyAlphaWas === 0) return;
   if (!animating && !copyDirty && any) return;                             // nothing changed since the last draw
   copyDirty = false;
@@ -353,7 +358,7 @@ function drawCopy(now){
   const narrow = W < 700;
   const w = Math.min(1835 * view.sc, W * (narrow ? .86 : .8));
   const fs = Math.max(narrow ? 14 : 13, 30 * view.sc), lh = fs * 2.3;
-  const top = (2880 - 1440 + 250 - dive.y) * view.sc + view.oy;
+  const top = (2880 - 1440 + (narrow ? 250 : 330) - dive.y) * view.sc + view.oy;   // desktop sits a little lower
   copyCtx.font = `400 ${fs}px Montserrat, sans-serif`; copyCtx.textBaseline = 'middle';
   let y = top + lh / 2;
   copyParas.forEach((t, i) => {
@@ -378,10 +383,13 @@ function updateCopy(){
   if (settled && copyFor !== cur){
     copyFor = cur;
     copyParas = innerWidth < 700 ? COPY[cur].slice(0, 1) : COPY[cur];     // phones: first paragraph only
+    copyNarrow = innerWidth < 700;
     copyEl.textContent = copyParas.join(' ');
-    copyShownAt = now; copyHiddenAt = -1;
+    copyShownAt = now; copyHiddenAt = -1; copyDirty = true;
   }
-  if (!settled && copyShownAt >= 0 && copyHiddenAt < 0){ copyHiddenAt = now; copyFadeFrom = copyAlphaWas; }
+  if (copyFor >= 0 && copyHiddenAt < 0 && (innerWidth < 700) !== copyNarrow){   // crossed the phone width while resizing
+    copyNarrow = innerWidth < 700; copyParas = copyNarrow ? COPY[copyFor].slice(0, 1) : COPY[copyFor]; copyEl.textContent = copyParas.join(' '); copyDirty = true; }
+  if (!settled && copyShownAt >= 0 && copyHiddenAt < 0){ copyHiddenAt = now; copyFadeFrom = copyAlphaWas; copyDirty = true; }
   if (dive.moving) copyDirty = true;                                        // the text rides with the camera
   if (!dive.under && !dive.moving && copyHiddenAt >= 0 && now - copyHiddenAt > .4){ copyFor = -1; copyShownAt = -1; copyHiddenAt = -1; copyParas = []; copyDirty = true; }
   drawCopy(now);
