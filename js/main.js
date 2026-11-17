@@ -108,7 +108,7 @@ float swell(vec2 p){
 void main(){
   vec2 s = gl_FragCoord.xy;
   vec2 p = vec2((s.x - uOff.x) / uScale, (uRes.y - s.y - uOff.y) / uScale + uCamY);   // plate px, y down (camera moves for the dive)
-  float below = step(uHorizon + 1., p.y);
+  float below = step(uHorizon + 1., p.y) * (1. - smoothstep(1060., 1300., p.y));   // surface effects only on the surface, not the deep water below it
   float depth = clamp((p.y - uHorizon) / (${PH}. - uHorizon), 0., 1.);
 
   float bob = sin(uTime*1.3)*4. + sin(uTime*.7+1.)*2.;
