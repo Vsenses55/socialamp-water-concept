@@ -262,11 +262,11 @@ void main(){
       float fres = pow(1. - n.z, 2.2);
       bOff += n.xy * Rw * .3 * inside * f;                                   // the bubble bends what's behind it
       vec3 irid = .5 + .5 * cos(6.2831 * (fres * 1.3 + vec3(0., .33, .67) + b.w * .15 + uTime * .03));
-      bAdd += mix(vec3(.75, .9, 1.), irid, .45) * fres * .5 * inside * f;    // iridescent rim
-      bAdd += vec3(.85, .95, 1.) * smoothstep(1. - aa * 3., 1., rr) * inside * .35 * f;   // thin bright edge
+      bAdd += mix(vec3(.35, .62, 1.), irid, .3) * fres * .24 * inside * f;   // faint iridescent rim, tinted by the water
+      bAdd += vec3(.45, .72, 1.) * smoothstep(1. - aa * 3., 1., rr) * inside * .12 * f;   // thin edge, mostly see-through
       vec3 L = normalize(vec3(-.45, -.6, .66));                              // light from the surface, upper left
-      bAdd += vec3(1.) * pow(max(dot(n, L), 0.), 60.) * .9 * inside * f;     // highlight
-      bAdd += vec3(.6, .85, 1.) * pow(max(dot(n, normalize(vec3(.5, .55, .67))), 0.), 14.) * .12 * inside * f;   // soft second reflection
+      bAdd += vec3(.8, .92, 1.) * pow(max(dot(n, L), 0.), 60.) * .5 * inside * f;   // highlight
+      bAdd += vec3(.4, .7, 1.) * pow(max(dot(n, normalize(vec3(.5, .55, .67))), 0.), 14.) * .07 * inside * f;   // soft second reflection
       bIn = max(bIn, inside * f);
     }
     q += bOff;
@@ -444,7 +444,7 @@ const BUB_N = innerWidth < 700 ? 16 : 30;
 const rnd = (a, b) => a + Math.random() * (b - a);
 function newBubble(b, anywhere){
   const k = Math.random();
-  b.r = k < .7 ? rnd(4, 9) : k < .94 ? rnd(10, 17) : rnd(19, 28);       // plate px
+  b.r = k < .5 ? rnd(2.5, 4.5) : k < .8 ? rnd(4.5, 8) : k < .95 ? rnd(8, 13) : rnd(14, 19);   // plate px: mostly tiny, a few medium
   b.x = rnd(140, 2420);
   b.y = anywhere ? rnd(1500, 2760) : rnd(2760, 2900);
   b.v = (16 + b.r * 1.4) * rnd(.8, 1.2);                                   // bigger bubbles rise a little faster
