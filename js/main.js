@@ -50,7 +50,8 @@ uniform sampler2D tPlate, tA, tB, tGlow, tStreak;
 uniform float uMix, uSoft, uRipT, uTilt;
 uniform sampler2D tSim; uniform vec2 uSimTexel; uniform float uSeabed;   // water simulation (on the surface, or on the seabed once you've dived)
 uniform float uCamY, uCross;
-uniform vec2 uUwCur, uUwVel; uniform float uUwAmt; uniform sampler2D tCopy;   // underwater: cursor pocket of moving water                      // dive: camera offset (plate px) and surface-crossing strength
+uniform vec2 uUwCur, uUwVel; uniform float uUwAmt; uniform sampler2D tCopy;
+uniform vec4 uBub[32]; uniform float uBubF[32];   // rising bubbles: x, y, radius (plate px), phase; and their fade   // underwater: cursor pocket of moving water                      // dive: camera offset (plate px) and surface-crossing strength
 uniform float uK, uKt, uTy; uniform vec2 uC;   // responsive: card scale about uC, title scale anchored above the card
 uniform sampler2D tTitles;
 uniform vec2 uSun; uniform float uSunScale, uSunGain;
@@ -243,7 +244,34 @@ void main(){
       wv += vec2(fbm(p * .012 + uTime * .4) - .5, fbm(p * .012 - uTime * .35 + 5.) - .5) * 6. * fall;
       q += wv;
     }
+    // ---- bubbles: soft wobbling lenses with an iridescent rim and a bright highlight ----
+    vec2 bOff = vec2(0.); vec3 bAdd = vec3(0.); float bIn = 0.;
+    for (int i = 0; i < 32; i++){
+      vec4 b = uBub[i]; float f = uBubF[i];
+      if (f <= .001) continue;
+      vec2 d = p - b.xy;
+      if (abs(d.x) > b.z * 1.2 || abs(d.y) > b.z * 1.2) continue;
+      float ang = atan(d.y, d.x);
+      float Rw = b.z * (1. + .05 * sin(3. * ang + uTime * 1.6 + b.w) + .035 * sin(5. * ang - uTime * 1.2 + b.w * 2.3)
+                           + .025 * sin(2. * ang + uTime * .9 + b.w * 4.1));        // the outline wobbles like the reference
+      float rr = length(d) / Rw;
+      if (rr > 1.08) continue;
+      float aa = 1.2 / Rw;                                                   // about one pixel of soft edge
+      float inside = 1. - smoothstep(1. - aa, 1. + aa, rr);
+      vec3 n = vec3(d / Rw, sqrt(max(0., 1. - rr * rr)));
+      float fres = pow(1. - n.z, 2.2);
+      bOff += n.xy * Rw * .3 * inside * f;                                   // the bubble bends what's behind it
+      vec3 irid = .5 + .5 * cos(6.2831 * (fres * 1.3 + vec3(0., .33, .67) + b.w * .15 + uTime * .03));
+      bAdd += mix(vec3(.75, .9, 1.), irid, .45) * fres * .5 * inside * f;    // iridescent rim
+      bAdd += vec3(.85, .95, 1.) * smoothstep(1. - aa * 3., 1., rr) * inside * .35 * f;   // thin bright edge
+      vec3 L = normalize(vec3(-.45, -.6, .66));                              // light from the surface, upper left
+      bAdd += vec3(1.) * pow(max(dot(n, L), 0.), 60.) * .9 * inside * f;     // highlight
+      bAdd += vec3(.6, .85, 1.) * pow(max(dot(n, normalize(vec3(.5, .55, .67))), 0.), 14.) * .12 * inside * f;   // soft second reflection
+      bIn = max(bIn, inside * f);
+    }
+    q += bOff;
     vec3 u = plate(q).rgb;
+    u = mix(u, u * 1.06 + vec3(.0, .02, .05), bIn * .5);                    // a touch clearer inside the bubble
     // caustics dancing on the seabed
     // the cursor stirs the caustic light: same simulation and strength as the surface, laid flat on the sand
     float sd = max(p.y - 2470., 1.);
@@ -267,9 +295,10 @@ void main(){
     u += vec3(.45, .75, 1.) * uCross * .35 * exp(-pow((p.y - 1440.) / 160., 2.));
     col = mix(col, u, uw);
     // the copy, drawn into the scene so the water bends it too
-    vec2 ts = (s + vec2(wv.x, -wv.y) * uScale) / uRes;
+    vec2 ts = (s + vec2(wv.x + bOff.x, -wv.y - bOff.y) * uScale) / uRes;   // bubbles in front of the copy bend it too
     vec4 tc = texture2D(tCopy, ts);
     col = col * (1. - tc.a) + tc.rgb;
+    col += bAdd * uw;
   }
 
   col += (hash(s + fract(uTime)) - .5) / 255.;               // dither: no banding in the gradients
@@ -283,7 +312,7 @@ const scene = new THREE.Scene(), cam = new THREE.OrthographicCamera(-1,1,1,-1,0,
 const load = src => new Promise(r => new THREE.TextureLoader().load(src, t => { t.colorSpace = THREE.NoColorSpace; t.minFilter = THREE.LinearFilter; t.generateMipmaps = false; r(t); }));
 
 const uniforms = {
-  uCamY:{value:0}, uCross:{value:0}, uUwCur:{value:new THREE.Vector2(-9999, 0)}, uUwVel:{value:new THREE.Vector2()}, uUwAmt:{value:0}, tCopy:{value:null},
+  uCamY:{value:0}, uCross:{value:0}, uUwCur:{value:new THREE.Vector2(-9999, 0)}, uUwVel:{value:new THREE.Vector2()}, uUwAmt:{value:0}, tCopy:{value:null}, uBub:{value:Array.from({length:32}, () => new THREE.Vector4())}, uBubF:{value:new Array(32).fill(0)},
   tSim:{value:null}, uSeabed:{value:0}, uSimTexel:{value:new THREE.Vector2(1/384, 1/1024)},
   uTilt:{value:0}, uK:{value:1}, uKt:{value:1}, uTy:{value:482}, uC:{value:new THREE.Vector2(1280, 640)}, tTitles:{value:null}, tPlate:{value:null}, tA:{value:null}, tB:{value:null}, tGlow:{value:null}, tStreak:{value:null},
   uMix:{value:1}, uSoft:{value:0}, uRipT:{value:-100},
@@ -408,6 +437,32 @@ function stepPocket(dt){
   uniforms.uUwCur.value.set(uwPocket.x, uwPocket.y);
   uniforms.uUwVel.value.set(uwPocket.vx, uwPocket.vy);
   uniforms.uUwAmt.value = uwPocket.amt;
+}
+
+// ---- bubbles rising through the open water (a few dozen, mostly small) ----
+const BUB_N = innerWidth < 700 ? 16 : 30;
+const rnd = (a, b) => a + Math.random() * (b - a);
+function newBubble(b, anywhere){
+  const k = Math.random();
+  b.r = k < .7 ? rnd(4, 9) : k < .94 ? rnd(10, 17) : rnd(19, 28);       // plate px
+  b.x = rnd(140, 2420);
+  b.y = anywhere ? rnd(1500, 2760) : rnd(2760, 2900);
+  b.v = (16 + b.r * 1.4) * rnd(.8, 1.2);                                   // bigger bubbles rise a little faster
+  b.sa = rnd(4, 14); b.sf = rnd(.4, 1.1); b.ph = rnd(0, 6.283);
+  return b;
+}
+const bubbles = Array.from({length:BUB_N}, () => newBubble({}, true));
+function stepBubbles(dt, t){
+  const slow = reduceTilt ? .4 : 1;
+  bubbles.forEach((b, i) => {
+    b.y -= b.v * dt * slow;
+    if (b.y < 1470) newBubble(b, false);
+    const x = b.x + Math.sin(t * b.sf + b.ph) * b.sa;
+    // fade in as they rise from the seabed, fade out before the top of the underwater view
+    const f = Math.min(1, (2760 - b.y) / 140) * Math.min(1, (b.y - 1470) / 160);
+    uniforms.uBub.value[i].set(x, b.y, b.r, b.ph);
+    uniforms.uBubF.value[i] = Math.max(0, f);
+  });
 }
 
 // ---- the dive: hold to sink below the surface, click to come back up ----
@@ -680,6 +735,7 @@ function loop(){
   stepDive();
   if (uniforms.tB.value) updateCopy();
   stepPocket(dt);
+  stepBubbles(dt, now);
   if (typeof tick === 'function' && uniforms.tB.value){ tick(now); stepWheel(dt); simStep(dt); drawCursor(dt); }
   renderer.render(scene, cam);
   requestAnimationFrame(loop);
