@@ -357,22 +357,23 @@ function drawCopy(now){
   if (!any){ copyAlphaWas = 0; copyTex.needsUpdate = true; return; }
   const narrow = W < 700;
   const w = Math.min(1835 * view.sc, W * (narrow ? .86 : .8));
-  const fs = Math.max(narrow ? 14 : 13, 30 * view.sc), lh = fs * 2.3;
+  const fs = narrow ? 12.5 : Math.max(12, 25 * view.sc);
   const top = (2880 - 1440 + (narrow ? 250 : 330) - dive.y) * view.sc + view.oy;   // desktop sits a little lower
   copyCtx.font = `400 ${fs}px Montserrat, sans-serif`; copyCtx.textBaseline = 'middle';
+  // wrap first, so phones can space the lines to fill the open water above the prompt
+  const wrapped = copyParas.map(t => { const out = []; let line = '';
+    for (const word of t.split(' ')){ const test = line ? line + ' ' + word : word;
+      if (copyCtx.measureText(test).width > w && line){ out.push(line); line = word; } else line = test; }
+    if (line) out.push(line); return out; });
+  const nLines = wrapped.reduce((n, l) => n + l.length, 0);
+  const lh = narrow ? Math.min(fs * 3.4, Math.max(fs * 2.4, (H * .78 - top) / Math.max(nLines, 1))) : fs * 2;
   let y = top + lh / 2;
-  copyParas.forEach((t, i) => {
+  wrapped.forEach((lines, i) => {
     const a = alphas[i];
-    copyCtx.fillStyle = `rgba(214,232,255,${(.82 * a).toFixed(3)})`;
+    copyCtx.fillStyle = `rgba(172,214,255,${(.7 * a).toFixed(3)})`;      // light water blue, see-through so the scene shows in the letters
     const dy = (1 - a) * 14;
-    let line = '';
-    for (const word of t.split(' ')){
-      const test = line ? line + ' ' + word : word;
-      if (copyCtx.measureText(test).width > w && line){ copyCtx.fillText(line, (W - w) / 2, y + dy); y += lh; line = word; }
-      else line = test;
-    }
-    if (line){ copyCtx.fillText(line, (W - w) / 2, y + dy); y += lh; }
-    y += fs * 1.15;
+    lines.forEach(l => { copyCtx.fillText(l, (W - w) / 2, y + dy); y += lh; });
+    y += fs * 1.2;
   });
   copyAlphaWas = Math.max(...alphas);
   copyTex.needsUpdate = true;
