@@ -51,7 +51,7 @@ uniform float uMix, uSoft, uRipT, uTilt;
 uniform sampler2D tSim; uniform vec2 uSimTexel; uniform float uSeabed;   // water simulation (on the surface, or on the seabed once you've dived)
 uniform float uCamY, uCross;
 uniform vec2 uUwCur, uUwVel; uniform float uUwAmt; uniform sampler2D tCopy;
-uniform vec4 uBub[32]; uniform float uBubF[32];   // rising bubbles: x, y, radius (plate px), phase; and their fade   // underwater: cursor pocket of moving water                      // dive: camera offset (plate px) and surface-crossing strength
+uniform vec4 uBub[40]; uniform float uBubF[40];   // rising bubbles: x, y, radius (plate px), phase; and their fade   // underwater: cursor pocket of moving water                      // dive: camera offset (plate px) and surface-crossing strength
 uniform float uK, uKt, uTy; uniform vec2 uC;   // responsive: card scale about uC, title scale anchored above the card
 uniform sampler2D tTitles;
 uniform vec2 uSun; uniform float uSunScale, uSunGain;
@@ -246,7 +246,7 @@ void main(){
     }
     // ---- bubbles: soft wobbling lenses with an iridescent rim and a bright highlight ----
     vec2 bOff = vec2(0.); vec3 bAdd = vec3(0.); float bIn = 0.;
-    for (int i = 0; i < 32; i++){
+    for (int i = 0; i < 40; i++){
       vec4 b = uBub[i]; float f = uBubF[i];
       if (f <= .001) continue;
       vec2 d = p - b.xy;
@@ -312,7 +312,7 @@ const scene = new THREE.Scene(), cam = new THREE.OrthographicCamera(-1,1,1,-1,0,
 const load = src => new Promise(r => new THREE.TextureLoader().load(src, t => { t.colorSpace = THREE.NoColorSpace; t.minFilter = THREE.LinearFilter; t.generateMipmaps = false; r(t); }));
 
 const uniforms = {
-  uCamY:{value:0}, uCross:{value:0}, uUwCur:{value:new THREE.Vector2(-9999, 0)}, uUwVel:{value:new THREE.Vector2()}, uUwAmt:{value:0}, tCopy:{value:null}, uBub:{value:Array.from({length:32}, () => new THREE.Vector4())}, uBubF:{value:new Array(32).fill(0)},
+  uCamY:{value:0}, uCross:{value:0}, uUwCur:{value:new THREE.Vector2(-9999, 0)}, uUwVel:{value:new THREE.Vector2()}, uUwAmt:{value:0}, tCopy:{value:null}, uBub:{value:Array.from({length:40}, () => new THREE.Vector4())}, uBubF:{value:new Array(40).fill(0)},
   tSim:{value:null}, uSeabed:{value:0}, uSimTexel:{value:new THREE.Vector2(1/384, 1/1024)},
   uTilt:{value:0}, uK:{value:1}, uKt:{value:1}, uTy:{value:482}, uC:{value:new THREE.Vector2(1280, 640)}, tTitles:{value:null}, tPlate:{value:null}, tA:{value:null}, tB:{value:null}, tGlow:{value:null}, tStreak:{value:null},
   uMix:{value:1}, uSoft:{value:0}, uRipT:{value:-100},
@@ -366,7 +366,7 @@ function makeCopyTex(){                                                     // a
   copyTex.colorSpace = THREE.NoColorSpace; copyTex.premultiplyAlpha = true; copyTex.generateMipmaps = false; copyTex.minFilter = THREE.LinearFilter;
   uniforms.tCopy.value = copyTex;
 }
-let copyNarrow = false, copyFor = -1, copyShownAt = -1, copyHiddenAt = -1, copyParas = [], copyAlphaWas = 0, copyFadeFrom = 0, copyDirty = true;
+let copyKey = '', copyNarrow = false, copyFor = -1, copyShownAt = -1, copyHiddenAt = -1, copyParas = [], copyAlphaWas = 0, copyFadeFrom = 0, copyDirty = true;
 document.fonts.load('400 20px Montserrat').then(() => { copyDirty = true; }).catch(()=>{});
 const easeOut = x => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
 function drawCopy(now){
@@ -378,9 +378,9 @@ function drawCopy(now){
   const alphas = copyParas.map((_, i) => shown ? easeOut((now - copyShownAt - i * .18) / .9)
                                                : copyHiddenAt >= 0 ? copyFadeFrom * (1 - Math.min(1, (now - copyHiddenAt) / .35)) : 0);
   const any = alphas.some(a => a > .001);
-  const animating = alphas.some(a => a > .001 && a < .999) || (shown && now - copyShownAt < 1.6) || (copyHiddenAt >= 0 && now - copyHiddenAt < .5);
-  if (!any && !copyDirty && copyAlphaWas === 0) return;
-  if (!animating && !copyDirty && any) return;                             // nothing changed since the last draw
+  const key = alphas.map(a => a.toFixed(3)).join() + '|' + copyParas.length + '|' + dive.y.toFixed(1);
+  if (key === copyKey && !copyDirty) return;                               // nothing visible changed since the last draw
+  copyKey = key;
   copyDirty = false;
   copyCtx.setTransform(dpr, 0, 0, dpr, 0, 0); copyCtx.clearRect(0, 0, W, H);
   if (!any){ copyAlphaWas = 0; copyTex.needsUpdate = true; return; }
@@ -440,18 +440,20 @@ function stepPocket(dt){
 }
 
 // ---- bubbles rising through the open water (a few dozen, mostly small) ----
-const BUB_N = innerWidth < 700 ? 16 : 30;
+const BUB_N = innerWidth < 700 ? 20 : 40;
 const rnd = (a, b) => a + Math.random() * (b - a);
-function newBubble(b, anywhere){
+function newBubble(b, anywhere, i){
+  if (i !== undefined) b.lane = i;
   const k = Math.random();
   b.r = k < .5 ? rnd(2.5, 4.5) : k < .8 ? rnd(4.5, 8) : k < .95 ? rnd(8, 13) : rnd(14, 19);   // plate px: mostly tiny, a few medium
-  b.x = rnd(140, 2420);
+  const lanes = BUB_N, lw = 2280 / lanes;                                 // spread evenly across the width
+  b.x = 140 + ((b.lane * 7) % lanes) * lw + rnd(0, lw);
   b.y = anywhere ? rnd(1500, 2760) : rnd(2760, 2900);
   b.v = (16 + b.r * 1.4) * rnd(.8, 1.2);                                   // bigger bubbles rise a little faster
   b.sa = rnd(4, 14); b.sf = rnd(.4, 1.1); b.ph = rnd(0, 6.283);
   return b;
 }
-const bubbles = Array.from({length:BUB_N}, () => newBubble({}, true));
+const bubbles = Array.from({length:BUB_N}, (_, i) => newBubble({}, true, i));
 function stepBubbles(dt, t){
   const slow = reduceTilt ? .4 : 1;
   bubbles.forEach((b, i) => {
