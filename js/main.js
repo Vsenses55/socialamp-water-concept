@@ -291,8 +291,6 @@ void main(){
     caus *= 1. + clamp(length(bg) * 25., 0., 1.2);                          // stirred light shimmers a little brighter
     u += vec3(.32, .62, .85) * clamp(caus, 0., 1.) * floorM * .55;
     u += vec3(.16, .24, .32) * clamp(-bg.y * 20. - bg.x * 7., -.2, .6) * .35 * floorM;
-    // passing through the surface: a bright, rippling band
-    u += vec3(.45, .75, 1.) * uCross * .35 * exp(-pow((p.y - 1440.) / 160., 2.));
     col = mix(col, u, uw);
     // the copy, drawn into the scene so the water bends it too
     vec2 ts = (s + vec2(wv.x + bOff.x, -wv.y - bOff.y) * uScale) / uRes;   // bubbles in front of the copy bend it too
